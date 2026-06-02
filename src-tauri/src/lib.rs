@@ -283,8 +283,13 @@ fn pin_to_dock(app_id: String) -> Result<String, String> {
 
 
 #[tauri::command]
+fn get_app_version() -> String {
+    env!("CARGO_PKG_VERSION").to_string()
+}
+
+#[tauri::command]
 async fn check_for_updates() -> Result<String, String> {
-    let current_version = "3.0.4"; // matches tauri.conf.json
+    let current_version = env!("CARGO_PKG_VERSION");
 
     // Fetch latest version string from raw.githubusercontent.com
     let latest_version = {
@@ -478,7 +483,8 @@ pub fn run() {
             open_browser_url,
             remediate_firewall,
             remediate_screen_lock,
-            get_signature_history
+            get_signature_history,
+            get_app_version
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

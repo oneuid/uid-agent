@@ -122,6 +122,7 @@ export default function App() {
   const loading = false;
   const [log, setLog] = useState<string>('');
   const [checkingUpdate, setCheckingUpdate] = useState<boolean>(false);
+  const [appVersion, setAppVersion] = useState<string>('3.0.0');
   const [showLUKSWizard, setShowLUKSWizard] = useState<boolean>(false);
   const [showFirewallWizard, setShowFirewallWizard] = useState<boolean>(false);
   const [showSecureBootWizard, setShowSecureBootWizard] = useState<boolean>(false);
@@ -140,6 +141,13 @@ export default function App() {
 
         const profile = await invoke<UserProfile | null>('get_user_profile');
         setUserProfile(profile);
+
+        try {
+          const version = await invoke<string>('get_app_version');
+          setAppVersion(version);
+        } catch (err) {
+          console.warn('Failed to get app version:', err);
+        }
       } catch (e) {
         console.error('Failed to load initial data:', e);
         setLog(`Failed to load initial data: ${e}`);
@@ -351,7 +359,7 @@ export default function App() {
           <div className="sidebar-footer">
             <div className="agent-info">
               <IconInfoCircle size={14} />
-              <span>{t('versionInfo')}</span>
+              <span>{t('versionInfo').replace('3.0.0', appVersion)}</span>
             </div>
             <button 
               className="btn btn-secondary pin-sidebar-btn" 
@@ -794,7 +802,7 @@ export default function App() {
                 <p className="settings-section-desc">{t('updateDesc')}</p>
                 <div className="update-card-row">
                   <div style={{ fontSize: '13px', color: 'var(--text-secondary)' }}>
-                    <span>{t('versionInfo')}</span>
+                    <span>{t('versionInfo').replace('3.0.0', appVersion)}</span>
                   </div>
                   <button 
                     onClick={async () => {
@@ -802,7 +810,7 @@ export default function App() {
                       setLog('Checking for software updates...');
                       try {
                         const res = await invoke<string>('check_for_updates');
-                        setLog(`${t('updateSuccess')} (Status: ${res})`);
+                        setLog(`${t('updateSuccess').replace('3.0.0', appVersion)} (Status: ${res})`);
                       } catch (e: any) {
                         setLog(`Update check failed: ${e}`);
                       } finally {
