@@ -54,6 +54,37 @@ Once installed via `.deb`:
 
 ---
 
+## Desktop GUI Build & Installation (Windows)
+
+### 1. Install Build Dependencies
+To compile the Tauri desktop app on Windows, make sure you have installed:
+1. **Microsoft C++ Build Tools**: Download and install the [Visual Studio Build Tools](https://visualstudio.microsoft.com/visual-cpp-build-tools/) and select the **Desktop development with C++** workload.
+2. **Rustup (Rust compiler)**: Install Rust via [rustup.rs](https://rustup.rs/), selecting the `stable-x86_64-pc-windows-msvc` toolchain.
+3. **Node.js**: Install Node.js (v18 or newer).
+
+### 2. Build and Package (.msi / .exe)
+Open PowerShell inside the cloned repository directory and run:
+```powershell
+# Compile and bundle the desktop application
+npx -y @tauri-apps/cli build
+```
+This will compile the Rust core and React interface, packaging them into native Windows installers:
+* **MSI Installer**: `src-tauri/target/release/bundle/msi/uid-agent-desktop_3.0.0_x64_en-US.msi`
+* **NSIS Setup Exe**: `src-tauri/target/release/bundle/nsis/uid-agent-desktop_3.0.0_x64-setup.exe`
+
+### 3. Install and Pin
+1. Double-click the generated `.msi` or `-setup.exe` installer inside the release bundle directory and follow the prompt.
+2. Once installed, search for **"UID Agent"** in the Windows Start Menu.
+3. Right-click the app icon and select **"Pin to Taskbar"** or **"Pin to Start"** for quick access.
+
+### 4. Uninstalling Old CLI Version (To Prevent Port Conflicts)
+If you previously installed the minimal CLI background daemon, run this single command in PowerShell to stop, unregister, and clean it up completely:
+```powershell
+Stop-Process -Name "uid-agent" -Force; Remove-ItemProperty -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run" -Name "UIDAgent" -ErrorAction SilentlyContinue; Remove-Item -Path "$env:LOCALAPPDATA\uid-agent" -Recurse -Force -ErrorAction SilentlyContinue
+```
+
+---
+
 ## CLI Installation & Usage
 
 For headless servers or environments where only the CLI daemon is required:

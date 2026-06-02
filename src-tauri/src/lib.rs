@@ -7,9 +7,187 @@ use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent}
 
 // Tauri Commands
 
+// Tauri Commands
+
+
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
+struct UserProfile {
+    token: String,
+    name: String,
+    email: String,
+    avatar: Option<String>,
+}
+
+#[tauri::command]
+fn get_user_profile() -> Option<UserProfile> {
+    let home = std::env::var("HOME").unwrap_or_else(|_| "/home/s".to_string());
+    let path = format!("{}/.config/uid/user.json", home);
+    if let Ok(content) = std::fs::read_to_string(path) {
+        serde_json::from_str::<UserProfile>(&content).ok()
+    } else {
+        None
+    }
+}
+
+#[tauri::command]
+fn logout_user() -> Result<(), String> {
+    let home = std::env::var("HOME").unwrap_or_else(|_| "/home/s".to_string());
+    let path = format!("{}/.config/uid/user.json", home);
+    let _ = std::fs::remove_file(path);
+    Ok(())
+}
+
+#[tauri::command]
+fn open_browser_url(url: String) -> Result<(), String> {
+    let _ = Command::new("xdg-open").arg(url).status();
+    Ok(())
+}
+
+#[tauri::command]
+async fn remediate_firewall() -> Result<(), String> {
+    #[cfg(target_os = "linux")]
+    {
+        let is_ufw = std::path::Path::new("/usr/sbin/ufw").exists() || std::path::Path::new("/usr/bin/ufw").exists();
+        let is_firewalld = std::path::Path::new("/usr/sbin/firewalld").exists();
+        
+        if is_ufw {
+            let status = Command::new("pkexec")
+                .args(["ufw", "enable"])
+                .status()
+                .map_err(|e| format!("Failed to execute pkexec ufw: {}", e))?;
+            
+            let _ = Command::new("pkexec")
+                .args(["systemctl", "enable", "ufw"])
+                .status();
+                
+            if status.success() {
+                return Ok(());
+            }
+        } else if is_firewalld {
+            let status = Command::new("pkexec")
+                .args(["systemctl", "enable", "--now", "firewalld"])
+                .status()
+                .map_err(|e| format!("Failed to execute pkexec firewalld: {}", e))?;
+                
+            if status.success() {
+                return Ok(());
+            }
+        }
+        
+        Err("No supported firewall (ufw/firewalld) found, or authentication failed.".to_string())
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        let status = Command::new("sudo")
+            .args(["/usr/libexec/ApplicationFirewall/socketfilterfw", "--setglobalstate", "on"])
+            .status()
+            .map_err(|e| format!("Failed to run socketfilterfw: {}", e))?;
+        if status.success() {
+            Ok(())
+        } else {
+            Err("Failed to enable Application Firewall. Admin privileges required.".to_string())
+        }
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        let status = Command::new("powershell")
+            .args(["-NoProfile", "-Command", "Start-Process powershell -ArgumentList 'Set-NetFirewallProfile -All -Enabled True' -Verb RunAs -Wait"])
+            .status()
+            .map_err(|e| format!("Failed to run PowerShell: {}", e))?;
+        if status.success() {
+            Ok(())
+        } else {
+            Err("Failed to enable Windows Defender Firewall. Admin privileges required.".to_string())
+        }
+    }
+
+    #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
+    Err("Unsupported operating system for firewall remediation.".to_string())
+}
+
+#[tauri::command]
+async fn remediate_screen_lock() -> Result<(), String> {
+    #[cfg(target_os = "linux")]
+    {
+        let mut success = false;
+        
+        if let Ok(status) = Command::new("gsettings")
+            .args(["set", "org.gnome.desktop.screensaver", "lock-enabled", "true"])
+            .status() {
+            if status.success() {
+                success = true;
+            }
+        }
+        let _ = Command::new("gsettings")
+            .args(["set", "org.gnome.desktop.session", "idle-delay", "300"])
+            .status();
+            
+        if let Ok(status) = Command::new("kwriteconfig5")
+            .args(["--group", "ScreenSaver", "--key", "Lock", "true"])
+            .status() {
+            if status.success() {
+                success = true;
+            }
+        }
+        
+        if success {
+            Ok(())
+        } else {
+            Err("Failed to automatically configure screen lock. Please enable lock-on-suspend/screensaver in your display settings.".to_string())
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        let status = Command::new("defaults")
+            .args(["write", "com.apple.screensaver", "askForPassword", "-int", "1"])
+            .status()
+            .map_err(|e| format!("Failed to run defaults: {}", e))?;
+        let _ = Command::new("defaults")
+            .args(["write", "com.apple.screensaver", "askForPasswordDelay", "-int", "0"])
+            .status();
+        if status.success() {
+            Ok(())
+        } else {
+            Err("Failed to set macOS screen lock settings.".to_string())
+        }
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        let status = Command::new("powershell")
+            .args(["-NoProfile", "-Command", "reg add 'HKEY_CURRENT_USER\\Control Panel\\Desktop' /v ScreenSaveActive /t REG_SZ /d 1 /f; reg add 'HKEY_CURRENT_USER\\Control Panel\\Desktop' /v ScreenSaverIsSecure /t REG_SZ /d 1 /f; reg add 'HKEY_CURRENT_USER\\Control Panel\\Desktop' /v ScreenSaveTimeOut /t REG_SZ /d 300 /f"])
+            .status()
+            .map_err(|e| format!("Failed to configure Windows registry for screen lock: {}", e))?;
+        if status.success() {
+            Ok(())
+        } else {
+            Err("Failed to modify registry settings for screen lock.".to_string())
+        }
+    }
+
+    #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
+    Err("Unsupported operating system for screen lock remediation.".to_string())
+}
+
+
+
 #[tauri::command]
 fn get_posture() -> serde_json::Value {
-    serde_json::to_value(uid_agent::posture::get_posture()).unwrap_or(serde_json::Value::Null)
+    let p = uid_agent::posture::get_posture();
+    json!({
+        "os_family": p.os_name,
+        "os_release": p.os_version,
+        "hostname": p.hostname,
+        "firewall_status": if p.firewall_active { "active" } else { "inactive" },
+        "disk_encrypted": p.disk_encrypted,
+        "secure_boot": p.secure_boot,
+        "screen_lock_active": p.screen_lock_active,
+        "ssh_keys_secure": p.ssh_keys_secure,
+        "vpn_active": p.vpn_active
+    })
 }
 
 #[tauri::command]
@@ -18,66 +196,42 @@ fn get_certificates() -> Vec<serde_json::Value> {
 }
 
 #[tauri::command]
-fn check_docker_installed() -> bool {
-    Command::new("docker")
-        .arg("--version")
-        .output()
-        .map(|o| o.status.success())
-        .unwrap_or(false)
-}
-
-#[tauri::command]
-fn check_app_status(app_id: String) -> serde_json::Value {
-    if app_id != "zalo" {
-        return json!({ "status": "unknown" });
-    }
-
-    // Check if docker container exists and check status
-    let output = Command::new("docker")
-        .args(&["ps", "-a", "--filter", "name=uid-zalo", "--format", "{{.Status}}"])
-        .output();
-
-    match output {
-        Ok(out) if out.status.success() => {
-            let status_str = String::from_utf8_lossy(&out.stdout).trim().to_string();
-            if status_str.is_empty() {
-                json!({ "status": "not_installed" })
-            } else if status_str.contains("Up") {
-                json!({ "status": "running" })
-            } else {
-                json!({ "status": "stopped" })
+fn get_signature_history() -> Vec<serde_json::Value> {
+    let home = std::env::var("HOME")
+        .or_else(|_| std::env::var("USERPROFILE"))
+        .unwrap_or_else(|_| "/home/s".to_string());
+    let path = format!("{}/.uid/signature_history.json", home);
+    if let Ok(content) = std::fs::read_to_string(&path) {
+        if let Ok(json_val) = serde_json::from_str::<serde_json::Value>(&content) {
+            if let Some(arr) = json_val.as_array() {
+                return arr.clone();
             }
         }
-        _ => json!({ "status": "not_installed" }),
     }
+    Vec::new()
 }
+
 
 #[tauri::command]
 fn pin_to_dock(app_id: String) -> Result<String, String> {
-    let desktop_filename = if app_id == "agent" {
-        "uid-agent-desktop.desktop"
-    } else if app_id == "zalo" {
-        "zalo-sandbox.desktop"
-    } else {
+    if app_id != "agent" {
         return Err("Unsupported app".to_string());
-    };
+    }
+    let desktop_filename = "uid-agent-desktop.desktop".to_string();
 
-    // GNOME gsettings command to get current favorites and append our desktop file
     let output = Command::new("gsettings")
         .args(&["get", "org.gnome.shell", "favorite-apps"])
         .output()
         .map_err(|e| format!("Failed to get GNOME settings: {}", e))?;
 
     let favorites_str = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    if favorites_str.contains(desktop_filename) {
+    if favorites_str.contains(&desktop_filename) {
         return Ok("Already pinned to Dock".to_string());
     }
 
-    // Append to GNOME favorite-apps array
     let new_favorites = if favorites_str == "@as []" || favorites_str == "[]" {
         format!("['{}']", desktop_filename)
     } else {
-        // Remove trailing bracket and append
         let trimmed = favorites_str.trim_end_matches(']');
         format!("{trimmed}, '{desktop_filename}']")
     };
@@ -94,223 +248,14 @@ fn pin_to_dock(app_id: String) -> Result<String, String> {
     }
 }
 
-#[tauri::command]
-async fn install_app(app_id: String) -> Result<String, String> {
-    if app_id != "zalo" {
-        return Err("Unsupported application".to_string());
-    }
-
-    if !check_docker_installed() {
-        return Err("Docker is not installed on this system. Please install Docker first.".to_string());
-    }
-
-    // Authorize local docker X11 access
-    let _ = Command::new("xhost").arg("+local:docker").status();
-    let _ = Command::new("xhost").arg("+local:root").status();
-
-    // Pull the Wine Docker image
-    let pull_status = Command::new("docker")
-        .args(&["pull", "scottyhardy/docker-wine:latest"])
-        .status()
-        .map_err(|e| format!("Failed to pull docker image: {}", e))?;
-
-    if !pull_status.success() {
-        return Err("Failed to pull docker-wine image".to_string());
-    }
-
-    let home = std::env::var("HOME").unwrap_or_else(|_| "/home/s".to_string());
-    
-    // Create folders on host to persist data (chat history, registry, configurations)
-    let wine_persist_dir = format!("{}/.local/share/uid/apps/zalo/wineprefix", home);
-    let downloads_dir = format!("{}/Downloads/Zalo", home);
-    let _ = std::fs::create_dir_all(&wine_persist_dir);
-    let _ = std::fs::create_dir_all(&downloads_dir);
-
-    let wine_volume_mount = format!("{}:/home/wineuser/.wine", wine_persist_dir);
-    let downloads_volume_mount = format!("{}:/home/wineuser/downloads", downloads_dir);
-
-    // Create the container with X11, audio, GPU acceleration and persistent storage mounts, tail -f to keep alive
-    let create_status = Command::new("docker")
-        .args(&[
-            "run", "-d",
-            "--name", "uid-zalo",
-            "--net=host",
-            "--ipc=host",
-            "-v", "/tmp/.X11-unix:/tmp/.X11-unix:ro",
-            "-e", "DISPLAY",
-            "-v", "/run/user/1000/pulse/native:/tmp/pulse-socket",
-            "-e", "PULSE_SERVER=unix:/tmp/pulse-socket",
-            "--device", "/dev/dri",
-            "-v", &wine_volume_mount,
-            "-v", &downloads_volume_mount,
-            "scottyhardy/docker-wine:latest",
-            "tail", "-f", "/dev/null"
-        ])
-        .status()
-        .map_err(|e| format!("Failed to create container: {}", e))?;
-
-    if !create_status.success() {
-        // Container might already exist, remove and recreate
-        let _ = Command::new("docker").args(&["stop", "uid-zalo"]).status();
-        let _ = Command::new("docker").args(&["rm", "uid-zalo"]).status();
-        
-        let retry_status = Command::new("docker")
-            .args(&[
-                "run", "-d",
-                "--name", "uid-zalo",
-                "--net=host",
-                "--ipc=host",
-                "-v", "/tmp/.X11-unix:/tmp/.X11-unix:ro",
-                "-e", "DISPLAY",
-                "-v", "/run/user/1000/pulse/native:/tmp/pulse-socket",
-                "-e", "PULSE_SERVER=unix:/tmp/pulse-socket",
-                "--device", "/dev/dri",
-                "-v", &wine_volume_mount,
-                "-v", &downloads_volume_mount,
-                "scottyhardy/docker-wine:latest",
-                "tail", "-f", "/dev/null"
-            ])
-            .status();
-        if retry_status.is_err() || !retry_status.unwrap().success() {
-            return Err("Failed to start docker container".to_string());
-        }
-    }
-
-    // Write Zalo SVG Icon to local user share icons folder
-    let icons_dir = format!("{}/.local/share/icons", home);
-    let _ = std::fs::create_dir_all(&icons_dir);
-    let zalo_icon_path = format!("{}/zalo-sandbox.svg", icons_dir);
-    if !std::path::Path::new(&zalo_icon_path).exists() {
-        let _ = Command::new("curl")
-            .args(&[
-                "-L", "-o", &zalo_icon_path,
-                "https://upload.wikimedia.org/wikipedia/commons/9/91/Icon_of_Zalo.svg"
-            ])
-            .status();
-    }
-
-    // Write desktop shortcut file
-    let desktop_dir = format!("{}/.local/share/applications", home);
-    let _ = std::fs::create_dir_all(&desktop_dir);
-    
-    // The Exec command checks if zalo is installed, if not, downloads and runs ZaloSetup.exe first
-    let desktop_content = "[Desktop Entry]\n\
-                           Name=Zalo (UID Sandbox)\n\
-                           Comment=Run Zalo safely inside a Docker container\n\
-                           Exec=xhost +local:docker && docker start uid-zalo && docker exec -d uid-zalo bash -c \"[ -f /home/wineuser/.wine/drive_c/users/wineuser/AppData/Local/Programs/Zalo/Zalo.exe ] && wine /home/wineuser/.wine/drive_c/users/wineuser/AppData/Local/Programs/Zalo/Zalo.exe || (wget -U 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36' -O /home/wineuser/downloads/ZaloSetup.exe 'https://zalo.me/download/zalo-pc?utm=90000' && wine /home/wineuser/downloads/ZaloSetup.exe)\"\n\
-                           Icon=zalo-sandbox\n\
-                           Terminal=false\n\
-                           Type=Application\n\
-                           Categories=Network;InstantMessaging;\n";
-    
-    std::fs::write(format!("{}/zalo-sandbox.desktop", desktop_dir), desktop_content)
-        .map_err(|e| format!("Failed to write desktop shortcut: {}", e))?;
-
-    // Download and install inside container in background task
-    tauri::async_runtime::spawn(async move {
-        // Run wget inside container to download ZaloSetup.exe (resolving redirect using Windows User-Agent)
-        let _ = Command::new("docker")
-            .args(&[
-                "exec",
-                "uid-zalo",
-                "wget",
-                "-U", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-                "-O", "/home/wineuser/downloads/ZaloSetup.exe",
-                "https://zalo.me/download/zalo-pc?utm=90000"
-            ])
-            .status();
-
-        // Run installer
-        let _ = Command::new("docker")
-            .args(&[
-                "exec", "-d",
-                "uid-zalo",
-                "wine",
-                "/home/wineuser/downloads/ZaloSetup.exe"
-            ])
-            .status();
-    });
-
-    Ok("Successfully configured container. Downloading Zalo installer inside container and starting Wine setup...".to_string())
-}
 
 #[tauri::command]
-async fn launch_app(app_id: String) -> Result<(), String> {
-    if app_id != "zalo" {
-        return Err("Unsupported application".to_string());
-    }
-
-    // Authorize local docker X11 access
-    let _ = Command::new("xhost").arg("+local:docker").status();
-    let _ = Command::new("xhost").arg("+local:root").status();
-
-    // Start container
-    let _ = Command::new("docker")
-        .args(&["start", "uid-zalo"])
-        .status()
-        .map_err(|e| format!("Failed to start container: {}", e))?;
-
-    let home = std::env::var("HOME").unwrap_or_else(|_| "/home/s".to_string());
-    
-    // Check if Zalo is installed
-    let zalo_path = format!("{}/.local/share/uid/apps/zalo/wineprefix/drive_c/users/wineuser/AppData/Local/Programs/Zalo/Zalo.exe", home);
-    let is_installed = std::path::Path::new(&zalo_path).exists();
-
-    if is_installed {
-        // Run Zalo
-        Command::new("docker")
-            .args(&[
-                "exec", "-d",
-                "uid-zalo",
-                "wine",
-                "/home/wineuser/.wine/drive_c/users/wineuser/AppData/Local/Programs/Zalo/Zalo.exe"
-            ])
-            .status()
-            .map_err(|e| format!("Failed to launch Zalo: {}", e))?;
-    } else {
-        // Zalo is not installed, download and run installer inside container (no permission issue)
-        let _ = Command::new("docker")
-            .args(&[
-                "exec",
-                "uid-zalo",
-                "wget",
-                "-U", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-                "-O", "/home/wineuser/downloads/ZaloSetup.exe",
-                "https://zalo.me/download/zalo-pc?utm=90000"
-            ])
-            .status();
-
-        Command::new("docker")
-            .args(&[
-                "exec", "-d",
-                "uid-zalo",
-                "wine",
-                "/home/wineuser/downloads/ZaloSetup.exe"
-            ])
-            .status()
-            .map_err(|e| format!("Failed to launch Zalo Setup: {}", e))?;
-    }
-
-    Ok(())
+async fn check_for_updates() -> Result<String, String> {
+    tokio::time::sleep(std::time::Duration::from_millis(1500)).await;
+    Ok("v3.0.0".to_string())
 }
 
-#[tauri::command]
-async fn stop_app(app_id: String) -> Result<(), String> {
-    if app_id != "zalo" {
-        return Err("Unsupported application".to_string());
-    }
 
-    let status = Command::new("docker")
-        .args(&["stop", "uid-zalo"])
-        .status()
-        .map_err(|e| format!("Failed to stop container: {}", e))?;
-
-    if status.success() {
-        Ok(())
-    } else {
-        Err("Failed to stop container".to_string())
-    }
-}
 
 // Entry Point
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -407,12 +352,14 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             get_posture,
             get_certificates,
-            check_docker_installed,
-            check_app_status,
-            install_app,
-            launch_app,
-            stop_app,
-            pin_to_dock
+            pin_to_dock,
+            check_for_updates,
+            get_user_profile,
+            logout_user,
+            open_browser_url,
+            remediate_firewall,
+            remediate_screen_lock,
+            get_signature_history
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

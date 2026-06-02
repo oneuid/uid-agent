@@ -6,41 +6,94 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd 2>/dev/null || pwd)"
 
 echo "[uid-agent] Starting installation on Linux..."
 
-# Create target directory for user binaries
+# Create target directories
 BIN_DIR="$HOME/.local/bin"
 mkdir -p "$BIN_DIR"
 
-# Stop service if running to avoid "text file busy" error
+ICON_DIR="$HOME/.local/share/icons"
+mkdir -p "$ICON_DIR"
+
+DESKTOP_DIR="$HOME/.local/share/applications"
+mkdir -p "$DESKTOP_DIR"
+
+# Stop active service if running to avoid text file busy errors
 if systemctl --user is-active --quiet uid-agent.service; then
     echo "[uid-agent] Stopping active background service..."
     systemctl --user stop uid-agent.service
 fi
 
-# Copy binary to local bin directory
-TARGET_BIN="$SCRIPT_DIR/uid-agent"
-if [ ! -f "$TARGET_BIN" ]; then
-    TARGET_BIN="$SCRIPT_DIR/target/release/uid-agent"
-fi
+# Stop desktop app if running
+pkill -9 -f uid-agent-desktop || true
 
-if [ ! -f "$TARGET_BIN" ]; then
-    echo "[uid-agent] Local binary not found, downloading precompiled binary..."
-    TARGET_BIN="/tmp/uid-agent"
-    if curl -sSL --fail "https://raw.githubusercontent.com/oneuid/uid-agent/main/uid-agent" -o "$TARGET_BIN"; then
-        chmod +x "$TARGET_BIN"
-    elif wget -q "https://raw.githubusercontent.com/oneuid/uid-agent/main/uid-agent" -O "$TARGET_BIN"; then
-        chmod +x "$TARGET_BIN"
-    else
-        echo "[ERROR] Precompiled binary not found, and failed to download from GitHub."
-        echo "Please build the project first using 'cargo build --release'."
-        exit 1
+# Check if rust/cargo is installed to build from source
+if command -v cargo &> /dev/null; then
+    echo "[uid-agent] Building latest binaries from source..."
+    
+    # 1. Build CLI/daemon binary
+    echo "[uid-agent] Compiling CLI daemon..."
+    cargo build --release
+    
+    # 2. Build UI assets
+    if [ -d "$SCRIPT_DIR/ui" ]; then
+        echo "[uid-agent] Compiling UI assets..."
+        (cd "$SCRIPT_DIR/ui" && pnpm install && pnpm build)
+    fi
+    
+    # 3. Build Tauri desktop application
+    if [ -d "$SCRIPT_DIR/src-tauri" ]; then
+        echo "[uid-agent] Compiling Tauri desktop app..."
+        (cd "$SCRIPT_DIR/src-tauri" && cargo build --release)
     fi
 fi
 
-cp "$TARGET_BIN" "$BIN_DIR/uid-agent"
-chmod +x "$BIN_DIR/uid-agent"
-echo "[uid-agent] Copied binary to $BIN_DIR/uid-agent"
+# Copy Daemon Binary
+TARGET_BIN="$SCRIPT_DIR/target/release/uid-agent"
+if [ ! -f "$TARGET_BIN" ] && [ -f "$SCRIPT_DIR/uid-agent" ]; then
+    TARGET_BIN="$SCRIPT_DIR/uid-agent"
+fi
 
-# Set up systemd user service
+if [ -f "$TARGET_BIN" ]; then
+    cp "$TARGET_BIN" "$BIN_DIR/uid-agent"
+    chmod +x "$BIN_DIR/uid-agent"
+    echo "[uid-agent] Installed daemon binary to $BIN_DIR/uid-agent"
+else
+    echo "[WARNING] Daemon binary not found. Background service might not start."
+fi
+
+# Copy GUI Desktop Binary
+TARGET_GUI="$SCRIPT_DIR/src-tauri/target/release/uid-agent-desktop"
+if [ ! -f "$TARGET_GUI" ] && [ -f "$SCRIPT_DIR/uid-agent-desktop" ]; then
+    TARGET_GUI="$SCRIPT_DIR/uid-agent-desktop"
+fi
+
+if [ -f "$TARGET_GUI" ]; then
+    cp "$TARGET_GUI" "$BIN_DIR/uid-agent-desktop"
+    chmod +x "$BIN_DIR/uid-agent-desktop"
+    echo "[uid-agent] Installed GUI desktop binary to $BIN_DIR/uid-agent-desktop"
+    
+    # Copy App Icon
+    if [ -f "$SCRIPT_DIR/src-tauri/icons/128x128.png" ]; then
+        cp "$SCRIPT_DIR/src-tauri/icons/128x128.png" "$ICON_DIR/uid-agent-desktop.png"
+    fi
+    
+    # Create Desktop Launcher Entry
+    cat << DESKTOP_EOF > "$DESKTOP_DIR/uid-agent-desktop.desktop"
+[Desktop Entry]
+Name=UID Agent
+Comment=Endpoint Security Attestation Agent
+Exec=$BIN_DIR/uid-agent-desktop
+Icon=uid-agent-desktop
+Terminal=false
+Type=Application
+Categories=Security;System;
+DESKTOP_EOF
+    chmod +x "$DESKTOP_DIR/uid-agent-desktop.desktop"
+    echo "[uid-agent] Created desktop applications launcher at $DESKTOP_DIR/uid-agent-desktop.desktop"
+else
+    echo "[WARNING] GUI desktop binary not found. Desktop application will not be registered."
+fi
+
+# Set up systemd user service for background daemon
 SYSTEMD_USER_DIR="$HOME/.config/systemd/user"
 mkdir -p "$SYSTEMD_USER_DIR"
 
@@ -65,12 +118,13 @@ echo "[uid-agent] Created systemd service at $SERVICE_FILE"
 # Reload systemd user configuration
 systemctl --user daemon-reload
 
-# Enable and start the service
-systemctl --user enable uid-agent.service
-systemctl --user restart uid-agent.service
+# Enable and start the background daemon service
+if [ -f "$BIN_DIR/uid-agent" ]; then
+    systemctl --user enable uid-agent.service
+    systemctl --user restart uid-agent.service
+    echo "[uid-agent] Service successfully registered and started."
+    echo "  Check daemon status:  systemctl --user status uid-agent.service"
+fi
 
-echo "[uid-agent] Service successfully registered and started."
-echo "[uid-agent] You can check its status using:"
-echo "  systemctl --user status uid-agent.service"
-echo "[uid-agent] Or read logs using:"
-echo "  journalctl --user -u uid-agent.service -f"
+echo "[uid-agent] Installation completed successfully!"
+echo "  You can open UID Agent from your desktop Applications Menu."

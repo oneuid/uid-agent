@@ -108,6 +108,88 @@ fn read_persistent_certs(sig: &str) -> Option<Vec<serde_json::Value>> {
     None
 }
 
+fn clean_dn(dn: &str) -> String {
+    for pattern in &["CN = ", "CN=", "O = ", "O="] {
+        if let Some(pos) = dn.find(pattern) {
+            let val_part = &dn[pos + pattern.len()..];
+            if let Some(comma_pos) = val_part.find(", ") {
+                return val_part[..comma_pos].to_string();
+            } else {
+                return val_part.to_string();
+            }
+        }
+    }
+    dn.to_string()
+}
+
+fn parse_cert_info(der_bytes: &[u8]) -> Option<(String, String, String, String, String)> {
+    use std::io::Write;
+    use std::process::{Command, Stdio};
+
+    let mut child = Command::new("openssl")
+        .args([
+            "x509",
+            "-inform", "der",
+            "-noout",
+            "-dates",
+            "-subject",
+            "-issuer",
+            "-serial",
+            "-nameopt", "oneline,utf8",
+            "-dateopt", "iso_8601"
+        ])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .ok()?;
+
+    if let Some(mut stdin) = child.stdin.take() {
+        let _ = stdin.write_all(der_bytes);
+    }
+
+    let output = child.wait_with_output().ok()?;
+    if !output.status.success() {
+        return None;
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let mut valid_from = String::new();
+    let mut valid_to = String::new();
+    let mut subject = String::new();
+    let mut issuer = String::new();
+    let mut serial = String::new();
+
+    for line in stdout.lines() {
+        let line = line.trim();
+        if let Some(val) = line.strip_prefix("notBefore=") {
+            if val.len() >= 10 {
+                valid_from = val[..10].to_string();
+            } else {
+                valid_from = val.to_string();
+            }
+        } else if let Some(val) = line.strip_prefix("notAfter=") {
+            if val.len() >= 10 {
+                valid_to = val[..10].to_string();
+            } else {
+                valid_to = val.to_string();
+            }
+        } else if let Some(val) = line.strip_prefix("subject=") {
+            subject = clean_dn(val);
+        } else if let Some(val) = line.strip_prefix("issuer=") {
+            issuer = clean_dn(val);
+        } else if let Some(val) = line.strip_prefix("serial=") {
+            serial = val.to_string();
+        }
+    }
+
+    if valid_from.is_empty() || valid_to.is_empty() {
+        None
+    } else {
+        Some((valid_from, valid_to, subject, issuer, serial))
+    }
+}
+
 fn write_persistent_certs(sig: &str, certs: &[serde_json::Value]) {
     let home = get_home_dir();
     let dot_uid = format!("{}/.uid", home);
@@ -301,19 +383,65 @@ fn get_driver_paths() -> Vec<String> {
 }
 
 pub async fn start_web_server(keys: Arc<AgentKeys>) -> Result<(), Box<dyn std::error::Error>> {
-    let addr = "127.0.0.1:13013";
-    let listener = TcpListener::bind(addr).await?;
-    println!("[uid-agent] Local signing HTTP server listening on http://{}", addr);
+    let mut bound_any = false;
+    let (tx, mut rx) = tokio::sync::mpsc::channel::<(TcpStream, Arc<AgentKeys>)>(100);
 
-    loop {
-        let (stream, _) = listener.accept().await?;
-        let keys_clone = keys.clone();
+    // Bind to IPv4 loopback
+    let addr_v4 = "127.0.0.1:13013";
+    let tx_v4 = tx.clone();
+    let keys_v4 = keys.clone();
+    match TcpListener::bind(addr_v4).await {
+        Ok(listener) => {
+            bound_any = true;
+            println!("[uid-agent] Local signing HTTP server listening on http://{}", addr_v4);
+            tokio::spawn(async move {
+                loop {
+                    if let Ok((stream, _)) = listener.accept().await {
+                        let _ = tx_v4.send((stream, keys_v4.clone())).await;
+                    }
+                }
+            });
+        }
+        Err(e) => {
+            eprintln!("[uid-agent] Failed to bind to IPv4 loopback 127.0.0.1:13013: {:?}", e);
+        }
+    }
+
+    // Bind to IPv6 loopback
+    let addr_v6 = "[::1]:13013";
+    let tx_v6 = tx.clone();
+    let keys_v6 = keys.clone();
+    match TcpListener::bind(addr_v6).await {
+        Ok(listener) => {
+            bound_any = true;
+            println!("[uid-agent] Local signing HTTP server listening on http://{}", addr_v6);
+            tokio::spawn(async move {
+                loop {
+                    if let Ok((stream, _)) = listener.accept().await {
+                        let _ = tx_v6.send((stream, keys_v6.clone())).await;
+                    }
+                }
+            });
+        }
+        Err(e) => {
+            eprintln!("[uid-agent] Note: Could not bind to IPv6 loopback [::1]:13013 (IPv6 might be disabled): {:?}", e);
+        }
+    }
+
+    if !bound_any {
+        return Err("Failed to bind to either IPv4 or IPv6 loopback addresses on port 13013".into());
+    }
+
+    // Handle all incoming connections from either loopback address
+    while let Some((stream, keys_clone)) = rx.recv().await {
         tokio::spawn(async move {
             if let Err(e) = handle_connection(stream, keys_clone).await {
                 eprintln!("[uid-agent] Web server connection error: {:?}", e);
             }
         });
     }
+
+    Ok(())
 }
 
 // Scans for active PKCS#11 module and parses the active token label
@@ -426,8 +554,11 @@ pub fn get_usb_certificates() -> Vec<serde_json::Value> {
             // For tokens requiring login, return placeholder to avoid slow objects listing before login
             certs.push(json!({
                 "id": "usb_auto_detected",
+                "label": label.clone(),
                 "subject": label.clone(),
                 "issuer": label.clone(),
+                "valid_from": "2024-01-01",
+                "valid_to": "2029-12-31",
                 "validTo": "2029-12-31"
             }));
         } else {
@@ -467,10 +598,23 @@ pub fn get_usb_certificates() -> Vec<serde_json::Value> {
                             .output();
                             
                         let mut cert_data = String::new();
+                        let mut valid_from = "2024-01-01".to_string();
+                        let mut valid_to = "2029-12-31".to_string();
+                        let mut subject_name = lbl.clone();
+                        let mut issuer_name = label.clone();
+                        let mut serial_num = "N/A".to_string();
+
                         if let Ok(out) = read_output {
                             if out.status.success() {
                                 if let Ok(bytes) = fs::read(&temp_cert_path) {
-                                    cert_data = hex::encode(bytes);
+                                    cert_data = hex::encode(&bytes);
+                                    if let Some((vf, vt, sub, iss, ser)) = parse_cert_info(&bytes) {
+                                        valid_from = vf;
+                                        valid_to = vt;
+                                        subject_name = sub;
+                                        issuer_name = iss;
+                                        serial_num = ser;
+                                    }
                                 }
                             }
                         }
@@ -478,9 +622,13 @@ pub fn get_usb_certificates() -> Vec<serde_json::Value> {
     
                         certs.push(json!({
                             "id": format!("usb_{}", id),
-                            "subject": lbl.clone(),
-                            "issuer": label.clone(),
-                            "validTo": "2029-12-31",
+                            "label": subject_name.clone(),
+                            "subject": subject_name.clone(),
+                            "issuer": issuer_name.clone(),
+                            "valid_from": valid_from.clone(),
+                            "valid_to": valid_to.clone(),
+                            "validTo": valid_to.clone(),
+                            "serial": serial_num.clone(),
                             "certData": cert_data
                         }));
                         current_label = None;
@@ -494,8 +642,11 @@ pub fn get_usb_certificates() -> Vec<serde_json::Value> {
             if !found_certs {
                 certs.push(json!({
                     "id": "usb_auto_detected",
+                    "label": label.clone(),
                     "subject": label.clone(),
                     "issuer": label.clone(),
+                    "valid_from": "2024-01-01",
+                    "valid_to": "2029-12-31",
                     "validTo": "2029-12-31"
                 }));
             }
@@ -507,13 +658,68 @@ pub fn get_usb_certificates() -> Vec<serde_json::Value> {
 }
 
 async fn handle_connection(mut stream: TcpStream, keys: Arc<AgentKeys>) -> Result<(), Box<dyn std::error::Error>> {
-    let mut buffer = vec![0u8; 8192];
-    let n = stream.read(&mut buffer).await?;
-    if n == 0 {
+    let mut buffer = Vec::new();
+    let mut temp = [0u8; 4096];
+    
+    // Read headers first (until we find "\r\n\r\n")
+    loop {
+        let n = stream.read(&mut temp).await?;
+        if n == 0 {
+            break;
+        }
+        buffer.extend_from_slice(&temp[..n]);
+        if buffer.windows(4).any(|w| w == b"\r\n\r\n") {
+            break;
+        }
+        if buffer.len() > 65536 {
+            return Ok(());
+        }
+    }
+
+    if buffer.is_empty() {
         return Ok(());
     }
 
-    let req_str = String::from_utf8_lossy(&buffer[..n]);
+    let req_str = String::from_utf8_lossy(&buffer);
+    let pos = match req_str.find("\r\n\r\n") {
+        Some(p) => p,
+        None => return Ok(()),
+    };
+
+    let headers_part = &req_str[..pos];
+    
+    // Parse Content-Length
+    let mut content_length = 0;
+    for line in headers_part.lines() {
+        if line.to_lowercase().starts_with("content-length:") {
+            if let Some(val_str) = line.split(':').nth(1) {
+                content_length = val_str.trim().parse::<usize>().unwrap_or(0);
+            }
+        }
+    }
+
+    // Read remaining body bytes if needed
+    let current_body_len = buffer.len() - (pos + 4);
+    if current_body_len < content_length {
+        let mut remaining = content_length - current_body_len;
+        let mut body_temp = vec![0u8; remaining.min(4096)];
+        while remaining > 0 {
+            let n = stream.read(&mut body_temp).await?;
+            if n == 0 {
+                break;
+            }
+            buffer.extend_from_slice(&body_temp[..n]);
+            if n >= remaining {
+                break;
+            }
+            remaining -= n;
+            if body_temp.len() > remaining {
+                body_temp.resize(remaining, 0);
+            }
+        }
+    }
+
+    let req_str = String::from_utf8_lossy(&buffer).into_owned();
     let mut lines = req_str.lines();
     let request_line = match lines.next() {
         Some(line) => line,
@@ -527,6 +733,21 @@ async fn handle_connection(mut stream: TcpStream, keys: Arc<AgentKeys>) -> Resul
 
     let method = parts[0];
     let path = parts[1];
+
+    let mut origin = String::new();
+    let mut referer = String::new();
+    for line in req_str.lines() {
+        let line_lower = line.to_lowercase();
+        if line_lower.starts_with("origin:") {
+            if let Some(val) = line.split_once(':') {
+                origin = val.1.trim().to_string();
+            }
+        } else if line_lower.starts_with("referer:") {
+            if let Some(val) = line.split_once(':') {
+                referer = val.1.trim().to_string();
+            }
+        }
+    }
 
     if method == "OPTIONS" {
         let response = "HTTP/1.1 200 OK\r\n\
@@ -660,25 +881,94 @@ async fn handle_connection(mut stream: TcpStream, keys: Arc<AgentKeys>) -> Resul
         return Ok(());
     }
 
-    if method == "GET" && path == "/certificates" {
-        let pubkey_hex = hex::encode(keys.public_key().to_bytes());
-        
-        // Scan USB Token certificates
-        let mut cert_list = get_usb_certificates();
-        
-        // Always append the local secure agent key
-        cert_list.push(json!({
-            "id": "agent_identity_key",
-            "subject": format!("UID.one Identity Key (Attestation: {})", &pubkey_hex[..12]),
-            "issuer": "UID.one Cryptographic Enclave",
-            "validTo": "2036-01-01"
-        }));
-        
-        let certs = json!({
-            "certificates": cert_list
-        });
+    if method == "POST" && path == "/auth/sync" {
+        let body = if let Some(pos) = req_str.find("\r\n\r\n") {
+            &req_str[pos + 4..]
+        } else {
+            ""
+        };
 
-        let body = certs.to_string();
+        if let Ok(req_json) = serde_json::from_str::<serde_json::Value>(body) {
+            let home = get_home_dir();
+            let config_dir = format!("{}/.config/uid", home);
+            let _ = fs::create_dir_all(&config_dir);
+            let config_path = format!("{}/user.json", config_dir);
+            
+            let token = req_json["token"].as_str().unwrap_or_default();
+            let name = req_json["user"]["name"].as_str().unwrap_or_default();
+            let email = req_json["user"]["email"].as_str().unwrap_or_default();
+            let avatar = req_json["user"]["avatar"].as_str();
+
+            let user_profile = json!({
+                "token": token,
+                "name": name,
+                "email": email,
+                "avatar": avatar
+            });
+
+            let _ = fs::write(&config_path, user_profile.to_string());
+
+            let res_body = json!({ "success": true }).to_string();
+            let response = format!(
+                "HTTP/1.1 200 OK\r\n\
+                 Access-Control-Allow-Origin: *\r\n\
+                 Content-Type: application/json\r\n\
+                 Content-Length: {}\r\n\
+                 Connection: close\r\n\r\n{}",
+                res_body.len(),
+                res_body
+            );
+            stream.write_all(response.as_bytes()).await?;
+            return Ok(());
+        }
+
+        let res_body = json!({ "success": false, "error": "Invalid payload" }).to_string();
+        let response = format!(
+            "HTTP/1.1 400 Bad Request\r\n\
+             Access-Control-Allow-Origin: *\r\n\
+             Content-Type: application/json\r\n\
+             Content-Length: {}\r\n\
+             Connection: close\r\n\r\n{}",
+            res_body.len(),
+            res_body
+        );
+        stream.write_all(response.as_bytes()).await?;
+        return Ok(());
+    }
+
+    if (method == "POST" || method == "GET") && path == "/auth/logout" {
+        let home = get_home_dir();
+        let path = format!("{}/.config/uid/user.json", home);
+        let _ = fs::remove_file(path);
+
+        let res_body = json!({ "success": true }).to_string();
+        let response = format!(
+            "HTTP/1.1 200 OK\r\n\
+             Access-Control-Allow-Origin: *\r\n\
+             Content-Type: application/json\r\n\
+             Content-Length: {}\r\n\
+             Connection: close\r\n\r\n{}",
+            res_body.len(),
+            res_body
+        );
+        stream.write_all(response.as_bytes()).await?;
+        return Ok(());
+    }
+
+    if method == "GET" && path == "/auth/profile" {
+        let home = get_home_dir();
+        let path = format!("{}/.config/uid/user.json", home);
+        
+        let body = if let Ok(content) = fs::read_to_string(path) {
+            if let Ok(profile_val) = serde_json::from_str::<serde_json::Value>(&content) {
+                json!({ "authenticated": true, "profile": profile_val }).to_string()
+            } else {
+                json!({ "authenticated": false }).to_string()
+            }
+        } else {
+            json!({ "authenticated": false }).to_string()
+        };
+
         let response = format!(
             "HTTP/1.1 200 OK\r\n\
              Access-Control-Allow-Origin: *\r\n\
@@ -692,7 +982,93 @@ async fn handle_connection(mut stream: TcpStream, keys: Arc<AgentKeys>) -> Resul
         return Ok(());
     }
 
-    if method == "POST" && path == "/sign" {
+    if method == "GET" && (path == "/history" || path == "/signature-history" || path == "/signature_history") {
+        let history = read_signature_history();
+        let body = json!({
+            "code": 0,
+            "success": true,
+            "history": history
+        }).to_string();
+        let response = format!(
+            "HTTP/1.1 200 OK\r\n\
+             Access-Control-Allow-Origin: *\r\n\
+             Content-Type: application/json\r\n\
+             Content-Length: {}\r\n\
+             Connection: close\r\n\r\n{}",
+            body.len(),
+            body
+        );
+        stream.write_all(response.as_bytes()).await?;
+        return Ok(());
+    }
+
+    if (method == "GET" || method == "POST") && (path == "/certificates" || path == "/certs" || path == "/getCertificates" || path.contains("certificate")) {
+        let pubkey_hex = hex::encode(keys.public_key().to_bytes());
+        
+        // Scan USB Token certificates
+        let mut cert_list = get_usb_certificates();
+        
+        // Always append the local secure agent key
+        cert_list.push(json!({
+            "id": "agent_identity_key",
+            "subject": format!("UID.one Identity Key (Attestation: {})", &pubkey_hex[..12]),
+            "issuer": "UID.one Cryptographic Enclave",
+            "validTo": "2036-01-01"
+        }));
+        
+        // Format certificates with rich, multi-compatible fields
+        let mut formatted_certs = Vec::new();
+        for c in &cert_list {
+            let id_str = c["id"].as_str().unwrap_or("usb_auto_detected");
+            let subject_str = c["subject"].as_str().unwrap_or("");
+            let issuer_str = c["issuer"].as_str().unwrap_or("");
+            let valid_to_str = c["validTo"].as_str().unwrap_or("2029-12-31");
+            let cert_data_str = c["certData"].as_str().unwrap_or("");
+            let base64_val = if !cert_data_str.is_empty() {
+                hex_to_base64(cert_data_str)
+            } else {
+                String::new()
+            };
+
+            formatted_certs.push(json!({
+                "id": id_str,
+                "certId": id_str,
+                "subject": subject_str,
+                "issuer": issuer_str,
+                "validTo": valid_to_str,
+                "valid_to": valid_to_str,
+                "certData": cert_data_str,
+                "cert_data": cert_data_str,
+                "base64": base64_val,
+                "cert": base64_val,
+                "value": base64_val
+            }));
+        }
+
+        let body = json!({
+            "certificates": formatted_certs,
+            "code": 0,
+            "Status": 0,
+            "data": formatted_certs,
+            "Certificates": formatted_certs,
+            "error": "",
+            "Message": ""
+        }).to_string();
+
+        let response = format!(
+            "HTTP/1.1 200 OK\r\n\
+             Access-Control-Allow-Origin: *\r\n\
+             Content-Type: application/json\r\n\
+             Content-Length: {}\r\n\
+             Connection: close\r\n\r\n{}",
+            body.len(),
+            body
+        );
+        stream.write_all(response.as_bytes()).await?;
+        return Ok(());
+    }
+
+    if method == "POST" && (path == "/sign" || path == "/signXML" || path == "/signPDF" || path == "/signHash" || path.contains("sign")) {
         let body = if let Some(pos) = req_str.find("\r\n\r\n") {
             &req_str[pos + 4..]
         } else {
@@ -700,13 +1076,24 @@ async fn handle_connection(mut stream: TcpStream, keys: Arc<AgentKeys>) -> Resul
         };
 
         if let Ok(req_json) = serde_json::from_str::<serde_json::Value>(body) {
-            let cert_id = req_json["certId"].as_str().unwrap_or("");
-            let hash_hex = req_json["hash"].as_str().unwrap_or("");
-            let pin = req_json["pin"].as_str().unwrap_or("");
+            let cert_id = req_json["certId"].as_str()
+                .or_else(|| req_json["CertificateId"].as_str())
+                .or_else(|| req_json["id"].as_str())
+                .unwrap_or("usb_auto_detected");
+            let hash_input = req_json["hash"].as_str()
+                .or_else(|| req_json["dataToSign"].as_str())
+                .or_else(|| req_json["Value"].as_str())
+                .or_else(|| req_json["data"].as_str())
+                .unwrap_or("");
+            let pin = req_json["pin"].as_str()
+                .or_else(|| req_json["PIN"].as_str())
+                .unwrap_or("");
 
-            println!("[uid-agent] Received sign request for cert_id: '{}', hash: '{}'", cert_id, hash_hex);
+            let hash_hex = normalize_hash(hash_input);
 
-            if cert_id.starts_with("usb_") || cert_id == "usb_auto_detected" {
+            println!("[uid-agent] Received sign request for cert_id: '{}', normalized hash: '{}'", cert_id, hash_hex);
+
+            if cert_id.starts_with("usb_") || cert_id == "usb_auto_detected" || cert_id.is_empty() {
                 let mut resolved_pin = pin.to_string();
                 if resolved_pin.is_empty() {
                     let label = if let Some((_, lbl, _)) = detect_active_driver_and_label() {
@@ -846,7 +1233,7 @@ async fn handle_connection(mut stream: TcpStream, keys: Arc<AgentKeys>) -> Resul
                         }
                     } else {
                         // Real Signing: perform sign, and only read cert if cert_id was auto_detected
-                        if let Ok(hash_bytes) = hex::decode(hash_hex) {
+                        if let Ok(hash_bytes) = hex::decode(&hash_hex) {
                             let temp_hash_path = format!("{}/temp_hash.bin", dot_uid);
                             let temp_sig_path = format!("{}/temp_sig.bin", dot_uid);
                             
@@ -916,23 +1303,66 @@ async fn handle_connection(mut stream: TcpStream, keys: Arc<AgentKeys>) -> Resul
 
                     if success {
                         if !cert_data.is_empty() {
+                            let mut valid_from = "2024-01-01".to_string();
+                            let mut valid_to = "2029-12-31".to_string();
+                            let mut subject_name = _label.clone();
+                            let mut issuer_name = _label.clone();
+                            let mut serial_num = "N/A".to_string();
+
+                            if let Ok(bytes) = hex::decode(&cert_data) {
+                                if let Some((vf, vt, sub, iss, ser)) = parse_cert_info(&bytes) {
+                                    valid_from = vf;
+                                    valid_to = vt;
+                                    subject_name = sub;
+                                    issuer_name = iss;
+                                    serial_num = ser;
+                                }
+                            }
+
                             let sig = get_usb_devices_signature();
                             let cert_list = vec![json!({
                                 "id": format!("usb_{}", raw_id),
-                                "subject": _label.clone(),
-                                "issuer": _label.clone(),
-                                "validTo": "2029-12-31",
+                                "label": subject_name.clone(),
+                                "subject": subject_name.clone(),
+                                "issuer": issuer_name.clone(),
+                                "valid_from": valid_from.clone(),
+                                "valid_to": valid_to.clone(),
+                                "validTo": valid_to.clone(),
+                                "serial": serial_num.clone(),
                                 "certData": cert_data.clone()
                             })];
                             set_cached_certs(sig.clone(), cert_list.clone());
                             write_persistent_certs(&sig, &cert_list);
                         }
 
+                        let base64_sig = if !sig_hex.is_empty() {
+                            hex_to_base64(&sig_hex)
+                        } else {
+                            String::new()
+                        };
+
+                        log_signature_to_history(
+                            &format!("usb_{}", raw_id),
+                            &_label,
+                            &hash_hex,
+                            "success",
+                            &origin,
+                            &referer
+                        );
+
                         let res_json = json!({
                             "success": true,
+                            "code": 0,
+                            "Status": 0,
                             "signature": sig_hex,
+                            "Signature": base64_sig,
+                            "data": base64_sig,
+                            "signature_hex": sig_hex,
+                            "signature_base64": base64_sig,
                             "publicKey": "",
-                            "certificate": cert_data
+                            "certificate": cert_data,
+                            "error": "",
+                            "Message": ""
                         });
                         let res_body = res_json.to_string();
                         let response = format!(
@@ -1004,15 +1434,38 @@ async fn handle_connection(mut stream: TcpStream, keys: Arc<AgentKeys>) -> Resul
                     return Ok(());
                 }
 
-                if let Ok(hash_bytes) = hex::decode(hash_hex) {
+                if let Ok(hash_bytes) = hex::decode(&hash_hex) {
                     let signature = keys.sign(&hash_bytes);
                     let sig_hex = hex::encode(signature.to_bytes());
                     let pubkey_hex = hex::encode(keys.public_key().to_bytes());
 
+                    let base64_sig = if !sig_hex.is_empty() {
+                        hex_to_base64(&sig_hex)
+                    } else {
+                        String::new()
+                    };
+
+                    log_signature_to_history(
+                        "agent_identity_key",
+                        "UID.one Local Agent Key",
+                        &hash_hex,
+                        "success",
+                        &origin,
+                        &referer
+                    );
+
                     let res_json = json!({
                         "success": true,
+                        "code": 0,
+                        "Status": 0,
                         "signature": sig_hex,
-                        "publicKey": pubkey_hex
+                        "Signature": base64_sig,
+                        "data": base64_sig,
+                        "signature_hex": sig_hex,
+                        "signature_base64": base64_sig,
+                        "publicKey": pubkey_hex,
+                        "error": "",
+                        "Message": ""
                     });
 
                     let res_body = res_json.to_string();
@@ -1132,3 +1585,189 @@ fn prompt_gui_approval(message: &str) -> bool {
     }
     true
 }
+
+fn base64_decode(input: &str) -> Result<Vec<u8>, &'static str> {
+    const CHARSET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut bytes = Vec::new();
+    let mut buffer = 0u32;
+    let mut count = 0;
+    
+    for c in input.chars() {
+        if c.is_whitespace() || c == '=' {
+            continue;
+        }
+        let val = match CHARSET.iter().position(|&x| x as char == c) {
+            Some(p) => p as u32,
+            None => return Err("Invalid character in base64"),
+        };
+        buffer = (buffer << 6) | val;
+        count += 1;
+        if count == 4 {
+            bytes.push((buffer >> 16) as u8);
+            bytes.push((buffer >> 8) as u8);
+            bytes.push(buffer as u8);
+            count = 0;
+            buffer = 0;
+        }
+    }
+    
+    if count == 2 {
+        bytes.push((buffer >> 4) as u8);
+    } else if count == 3 {
+        bytes.push((buffer >> 10) as u8);
+        bytes.push((buffer >> 2) as u8);
+    }
+    
+    Ok(bytes)
+}
+
+fn base64_encode(input: &[u8]) -> String {
+    const CHARSET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut result = String::with_capacity((input.len() + 2) / 3 * 4);
+    let mut i = 0;
+    while i < input.len() {
+        let chunk = &input[i..std::cmp::min(i + 3, input.len())];
+        let mut val = 0u32;
+        for (idx, &byte) in chunk.iter().enumerate() {
+            val |= (byte as u32) << (16 - idx * 8);
+        }
+        let chars_to_write = match chunk.len() {
+            1 => 2,
+            2 => 3,
+            _ => 4,
+        };
+        for idx in 0..chars_to_write {
+            let char_idx = ((val >> (18 - idx * 6)) & 0x3F) as usize;
+            result.push(CHARSET[char_idx] as char);
+        }
+        for _ in chars_to_write..4 {
+            result.push('=');
+        }
+        i += 3;
+    }
+    result
+}
+
+fn hex_to_base64(hex_str: &str) -> String {
+    if let Ok(bytes) = hex::decode(hex_str) {
+        base64_encode(&bytes)
+    } else {
+        String::new()
+    }
+}
+
+fn normalize_hash(input: &str) -> String {
+    let trimmed = input.trim();
+    if trimmed.is_empty() {
+        return String::new();
+    }
+    if trimmed.len() == 64 && trimmed.chars().all(|c| c.is_ascii_hexdigit()) {
+        return trimmed.to_lowercase();
+    }
+    if let Ok(decoded) = base64_decode(trimmed) {
+        if decoded.len() == 32 {
+            return hex::encode(decoded);
+        }
+    }
+    trimmed.to_string()
+}
+
+fn read_signature_history() -> Vec<serde_json::Value> {
+    let home = get_home_dir();
+    let path = format!("{}/.uid/signature_history.json", home);
+    if let Ok(content) = fs::read_to_string(&path) {
+        if let Ok(json_val) = serde_json::from_str::<serde_json::Value>(&content) {
+            if let Some(arr) = json_val.as_array() {
+                return arr.clone();
+            }
+        }
+    }
+    Vec::new()
+}
+
+fn log_signature_to_history(
+    cert_id: &str,
+    subject: &str,
+    hash: &str,
+    status: &str,
+    origin: &str,
+    referer: &str
+) {
+    let home = get_home_dir();
+    let dot_uid = format!("{}/.uid", home);
+    let _ = fs::create_dir_all(&dot_uid);
+    let path = format!("{}/signature_history.json", dot_uid);
+
+    let mut history = read_signature_history();
+    
+    let timestamp = if let Ok(time) = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH) {
+        let seconds = time.as_secs();
+        format_timestamp_iso8601(seconds)
+    } else {
+        "2026-06-02T11:44:27Z".to_string()
+    };
+
+    let entry = json!({
+        "timestamp": timestamp,
+        "cert_id": cert_id,
+        "subject": subject,
+        "hash": hash,
+        "status": status,
+        "origin": origin,
+        "referer": referer
+    });
+
+    history.insert(0, entry);
+
+    if history.len() > 100 {
+        history.truncate(100);
+    }
+
+    if let Ok(serialized) = serde_json::to_string_pretty(&history) {
+        let _ = fs::write(&path, serialized);
+    }
+}
+
+fn format_timestamp_iso8601(epoch_secs: u64) -> String {
+    let secs_per_day = 86400;
+    let days = epoch_secs / secs_per_day;
+    let secs_in_day = epoch_secs % secs_per_day;
+
+    let hour = secs_in_day / 3600;
+    let minute = (secs_in_day % 3600) / 60;
+    let second = secs_in_day % 60;
+
+    let mut year = 1970;
+    let mut days_left = days;
+
+    loop {
+        let is_leap = (year % 4 == 0 && year % 100 != 0) || (year % 400 == 0);
+        let days_in_year = if is_leap { 366 } else { 365 };
+        if days_left < days_in_year {
+            break;
+        }
+        days_left -= days_in_year;
+        year += 1;
+    }
+
+    let is_leap = (year % 4 == 0 && year % 100 != 0) || (year % 400 == 0);
+    let month_days = if is_leap {
+        [31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
+    } else {
+        [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
+    };
+
+    let mut month = 1;
+    for &d in &month_days {
+        if days_left < d {
+            break;
+        }
+        days_left -= d;
+        month += 1;
+    }
+
+    let day = days_left + 1;
+
+    format!("{:04}-{:02}-{:02}T{:02}:{:02}:{:02}Z", year, month, day, hour, minute, second)
+}
+

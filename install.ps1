@@ -40,19 +40,45 @@ if (-not (Test-Path $SourceExe -ErrorAction SilentlyContinue)) {
     }
 }
 
-# Check if pkcs11-tool is present or OpenSC is installed
-$HasPkcs11 = $false
-if (Get-Command "pkcs11-tool" -ErrorAction SilentlyContinue) {
-    $HasPkcs11 = $true
-} elseif (Test-Path "C:\Program Files\OpenSC Project\OpenSC\bin\pkcs11-tool.exe" -ErrorAction SilentlyContinue) {
-    $HasPkcs11 = $true
-} elseif (Test-Path "C:\Program Files (x86)\OpenSC Project\OpenSC\bin\pkcs11-tool.exe" -ErrorAction SilentlyContinue) {
-    $HasPkcs11 = $true
+# Check if OpenSC is present and verify its version
+$IsUpToDate = $false
+$OpenScPath = ""
+
+if (Get-Command "opensc-tool" -ErrorAction SilentlyContinue) {
+    $OpenScPath = "opensc-tool"
+} elseif (Test-Path "C:\Program Files\OpenSC Project\OpenSC\bin\opensc-tool.exe" -ErrorAction SilentlyContinue) {
+    $OpenScPath = "C:\Program Files\OpenSC Project\OpenSC\bin\opensc-tool.exe"
+} elseif (Test-Path "C:\Program Files (x86)\OpenSC Project\OpenSC\bin\opensc-tool.exe" -ErrorAction SilentlyContinue) {
+    $OpenScPath = "C:\Program Files (x86)\OpenSC Project\OpenSC\bin\opensc-tool.exe"
 }
 
-if (-not $HasPkcs11) {
-    Write-Host "[uid-agent] OpenSC / pkcs11-tool is required for USB Token signing but not found."
-    Write-Host "[uid-agent] Downloading and launching OpenSC installation wizard..."
+if ($OpenScPath) {
+    try {
+        $VerOutput = & $OpenScPath --version 2>&1
+        # Extract version number (e.g., "opensc-tool 0.25.1" -> 0.25.1)
+        if ($VerOutput -match "opensc-tool\s+([\d\.]+)") {
+            $CurrentVersion = $Matches[1]
+            Write-Host "[uid-agent] Found installed OpenSC version: $CurrentVersion"
+            
+            $MinVersion = [version]"0.25.1"
+            $InstalledVersion = [version]$CurrentVersion
+            if ($InstalledVersion -ge $MinVersion) {
+                $IsUpToDate = $true
+                Write-Host "[uid-agent] OpenSC version is up to date."
+            }
+        }
+    } catch {
+        # Fallback to true if path exists but version command fails
+        $IsUpToDate = $true
+    }
+}
+
+if (-not $IsUpToDate) {
+    if ($OpenScPath) {
+        Write-Host "[uid-agent] Installed OpenSC is outdated. Upgrading to version 0.25.1..."
+    } else {
+        Write-Host "[uid-agent] OpenSC is required for USB Token signing but was not found. Installing..."
+    }
     
     $MsiPath = Join-Path $env:TEMP "OpenSC-0.25.1_win64.msi"
     $MsiUri = "https://github.com/OpenSC/OpenSC/releases/download/0.25.1/OpenSC-0.25.1_win64.msi"
