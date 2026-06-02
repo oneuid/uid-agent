@@ -21,7 +21,7 @@ curl -sSL https://raw.githubusercontent.com/oneuid/uid-agent/main/install.sh | b
 
 Run the following command in PowerShell:
 ```powershell
-Invoke-Expression (Invoke-WebRequest -Uri https://raw.githubusercontent.com/oneuid/uid-agent/main/install.ps1 -UseBasicParsing).Content
+Invoke-Expression (Invoke-WebRequest -Headers @{"Cache-Control"="no-cache"} -Uri "https://raw.githubusercontent.com/oneuid/uid-agent/main/install.ps1?t=$(Get-Date -UFormat %s)" -UseBasicParsing).Content
 ```
 
 ---
