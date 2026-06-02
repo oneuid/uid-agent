@@ -10,16 +10,23 @@ if (-not (Test-Path $InstallDir)) {
     New-Item -ItemType Directory -Force -Path $InstallDir | Out-Null
 }
 
-# Resolve script directory
-$ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path -ErrorAction SilentlyContinue
-if (-not $ScriptDir) { $ScriptDir = $pwd }
+$SourceExe = ""
+if ($MyInvocation.MyCommand.Path) {
+    $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
+    if ($ScriptDir) {
+        $SourceExe = Join-Path $ScriptDir "uid-agent.exe"
+    }
+}
 
-$SourceExe = Join-Path $ScriptDir "uid-agent.exe"
-if (-not (Test-Path $SourceExe)) {
+if (-not $SourceExe) {
+    $SourceExe = "uid-agent.exe"
+}
+
+if (-not (Test-Path $SourceExe -ErrorAction SilentlyContinue)) {
     $SourceExe = "target\release\uid-agent.exe"
 }
 
-if (-not (Test-Path $SourceExe)) {
+if (-not (Test-Path $SourceExe -ErrorAction SilentlyContinue)) {
     Write-Host "[uid-agent] Local executable not found, downloading precompiled binary..."
     $SourceExe = Join-Path $env:TEMP "uid-agent.exe"
     $Uri = "https://raw.githubusercontent.com/oneuid/uid-agent/main/uid-agent.exe"
