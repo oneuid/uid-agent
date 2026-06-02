@@ -172,6 +172,19 @@ async fn install_app(app_id: String) -> Result<String, String> {
         }
     }
 
+    // Write Zalo SVG Icon to local user share icons folder
+    let icons_dir = format!("{}/.local/share/icons", home);
+    let _ = std::fs::create_dir_all(&icons_dir);
+    let zalo_icon_path = format!("{}/zalo-sandbox.svg", icons_dir);
+    if !std::path::Path::new(&zalo_icon_path).exists() {
+        let _ = Command::new("curl")
+            .args(&[
+                "-L", "-o", &zalo_icon_path,
+                "https://upload.wikimedia.org/wikipedia/commons/9/91/Icon_of_Zalo.svg"
+            ])
+            .status();
+    }
+
     // Write desktop shortcut file
     let desktop_dir = format!("{}/.local/share/applications", home);
     let _ = std::fs::create_dir_all(&desktop_dir);
@@ -181,7 +194,7 @@ async fn install_app(app_id: String) -> Result<String, String> {
                            Name=Zalo (UID Sandbox)\n\
                            Comment=Run Zalo safely inside a Docker container\n\
                            Exec=docker start uid-zalo && docker exec -d uid-zalo bash -c \"[ -f /home/wineuser/.wine/drive_c/users/wineuser/AppData/Local/Programs/Zalo/Zalo.exe ] && wine /home/wineuser/.wine/drive_c/users/wineuser/AppData/Local/Programs/Zalo/Zalo.exe || (curl -L -o /home/wineuser/downloads/ZaloSetup.exe https://chat.zalo.me/download/html5/ZaloSetup.exe && wine /home/wineuser/downloads/ZaloSetup.exe)\"\n\
-                           Icon=zalo\n\
+                           Icon=zalo-sandbox\n\
                            Terminal=false\n\
                            Type=Application\n\
                            Categories=Network;InstantMessaging;\n";
@@ -301,6 +314,35 @@ pub fn run() {
                     eprintln!("[uid-agent-desktop] Web server error: {:?}", e);
                 }
             });
+
+            // Write custom app icons to user local share icons directory
+            let home = std::env::var("HOME").unwrap_or_else(|_| "/home/s".to_string());
+            let icons_dir = format!("{}/.local/share/icons", home);
+            let _ = std::fs::create_dir_all(&icons_dir);
+
+            // Embed gold shield agent icon bytes and save it locally
+            let agent_icon_bytes = include_bytes!("../icons/128x128.png");
+            let agent_icon_path = format!("{}/uid-agent-desktop.png", icons_dir);
+            let _ = std::fs::write(&agent_icon_path, agent_icon_bytes);
+
+            // Register main agent desktop launcher dynamically with the current binary path
+            if let Ok(exe_path) = std::env::current_exe() {
+                let desktop_dir = format!("{}/.local/share/applications", home);
+                let _ = std::fs::create_dir_all(&desktop_dir);
+
+                let agent_desktop_content = format!(
+                    "[Desktop Entry]\n\
+                     Name=UID Agent\n\
+                     Comment=Endpoint Security Attestation Agent\n\
+                     Exec={}\n\
+                     Icon=uid-agent-desktop\n\
+                     Terminal=false\n\
+                     Type=Application\n\
+                     Categories=Security;System;\n",
+                    exe_path.to_string_lossy()
+                );
+                let _ = std::fs::write(format!("{}/uid-agent-desktop.desktop", desktop_dir), agent_desktop_content);
+            }
 
             // Initialize system tray menu
             let quit_i = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
