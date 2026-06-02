@@ -11,6 +11,30 @@ static USB_SIG_CACHE: OnceLock<Mutex<String>> = OnceLock::new();
 static CERTS_CACHE: OnceLock<Mutex<Vec<serde_json::Value>>> = OnceLock::new();
 static DRIVER_SIG_CACHE: OnceLock<Mutex<String>> = OnceLock::new();
 
+fn get_home_dir() -> String {
+    if cfg!(target_os = "windows") {
+        if let Ok(profile) = std::env::var("USERPROFILE") {
+            return profile;
+        }
+        let drive = std::env::var("HOMEDRIVE").unwrap_or_else(|_| "C:".to_string());
+        if let Ok(path) = std::env::var("HOMEPATH") {
+            return format!("{}{}", drive, path);
+        }
+        "C:\\".to_string()
+    } else {
+        if let Ok(home) = std::env::var("HOME") {
+            return home;
+        }
+        if let Ok(user) = std::env::var("USER") {
+            let path = format!("/home/{}", user);
+            if std::path::Path::new(&path).exists() {
+                return path;
+            }
+        }
+        "/tmp".to_string()
+    }
+}
+
 fn get_cached_driver() -> Option<(String, String, bool)> {
     let cache = DRIVER_CACHE.get_or_init(|| Mutex::new(None));
     let guard = cache.lock().ok()?;
@@ -58,7 +82,7 @@ fn set_cached_certs(sig: String, certs: Vec<serde_json::Value>) {
 }
 
 fn read_persistent_certs(sig: &str) -> Option<Vec<serde_json::Value>> {
-    let home = std::env::var("HOME").unwrap_or_else(|_| "/home/s".to_string());
+    let home = get_home_dir();
     let path = format!("{}/.uid/certs_cache.json", home);
     if let Ok(content) = fs::read_to_string(&path) {
         if let Ok(json_val) = serde_json::from_str::<serde_json::Value>(&content) {
@@ -85,7 +109,7 @@ fn read_persistent_certs(sig: &str) -> Option<Vec<serde_json::Value>> {
 }
 
 fn write_persistent_certs(sig: &str, certs: &[serde_json::Value]) {
-    let home = std::env::var("HOME").unwrap_or_else(|_| "/home/s".to_string());
+    let home = get_home_dir();
     let dot_uid = format!("{}/.uid", home);
     let _ = fs::create_dir_all(&dot_uid);
     let path = format!("{}/certs_cache.json", dot_uid);
@@ -212,7 +236,7 @@ fn check_driver_valid(driver: &str) -> Option<(String, bool)> {
 }
 
 fn get_driver_paths() -> Vec<String> {
-    let home = std::env::var("HOME").unwrap_or_else(|_| "/home/s".to_string());
+    let home = get_home_dir();
     
     let mut custom_drivers = Vec::new();
     let config_path = format!("{}/.uid/config.json", home);
@@ -356,7 +380,12 @@ fn detect_active_driver_and_label() -> Option<(String, String, bool)> {
         let drivers = get_driver_paths();
         for driver in drivers {
             if driver.contains("opensc") && std::path::Path::new(&driver).exists() {
-                detected = Some((driver, "USB Token".to_string(), false));
+                if let Some((label, login_required)) = check_driver_valid(&driver) {
+                    detected = Some((driver, label, login_required));
+                } else {
+                    // Default fallback: assume OpenSC requires login (highly secure by default)
+                    detected = Some((driver, "USB Token".to_string(), true));
+                }
                 break;
             }
         }
@@ -424,7 +453,7 @@ fn get_usb_certificates() -> Vec<serde_json::Value> {
                     }
                     
                     if let (Some(lbl), Some(id)) = (&current_label, &current_id) {
-                        let home = std::env::var("HOME").unwrap_or_else(|_| "/home/s".to_string());
+                        let home = get_home_dir();
                         let temp_cert_path = format!("{}/.uid/temp_cert_{}.der", home, id);
                         
                         let read_output = Command::new(get_pkcs11_tool_path())
@@ -573,7 +602,7 @@ async fn handle_connection(mut stream: TcpStream, keys: Arc<AgentKeys>) -> Resul
 
         if let Ok(req_json) = serde_json::from_str::<serde_json::Value>(body) {
             if let Some(new_path) = req_json["path"].as_str() {
-                let home = std::env::var("HOME").unwrap_or_else(|_| "/home/s".to_string());
+                let home = get_home_dir();
                 let config_path = format!("{}/.uid/config.json", home);
                 
                 let mut custom_drivers = Vec::new();
@@ -717,7 +746,7 @@ async fn handle_connection(mut stream: TcpStream, keys: Arc<AgentKeys>) -> Resul
                         cert_id.trim_start_matches("usb_").to_string()
                     };
 
-                    let home = std::env::var("HOME").unwrap_or_else(|_| "/home/s".to_string());
+                    let home = get_home_dir();
                     let dot_uid = format!("{}/.uid", home);
                     let _ = fs::create_dir_all(&dot_uid);
 
