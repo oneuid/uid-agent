@@ -2,10 +2,12 @@ mod crypto;
 mod posture;
 mod ssh_agent;
 mod websocket;
+mod server;
 
 use std::env;
 use std::sync::Arc;
 use crate::crypto::AgentKeys;
+#[cfg(unix)]
 use crate::ssh_agent::SshAgent;
 use crate::websocket::AgentWebSocketClient;
 
@@ -43,12 +45,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let signature = keys.sign(data);
             println!("{}", hex::encode(signature.to_bytes()));
         }
+        #[cfg(unix)]
         "daemon" => {
             println!("[uid-agent] Starting system endpoint security agent daemon...");
             let keys = Arc::new(AgentKeys::load_or_create()?);
             
             // Set default socket path in user's home folder ~/.uid/agent.sock
-            let home = env::var("HOME").unwrap_or_else(|_| "/home/s".to_string());
+            let home = env::var("HOME")
+                .or_else(|_| env::var("USERPROFILE"))
+                .unwrap_or_else(|_| "/home/s".to_string());
             let socket_path = format!("{}/.uid/agent.sock", home);
             
             let agent = SshAgent::new(keys.clone(), socket_path.clone());
@@ -57,8 +62,25 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             println!("  export SSH_AUTH_SOCK={}", socket_path);
             println!("  To test the agent key, run: ssh-add -l");
             
+            // Start local signing HTTP server in the background
+            let keys_clone = keys.clone();
+            tokio::spawn(async move {
+                if let Err(e) = server::start_web_server(keys_clone).await {
+                    eprintln!("[uid-agent] Local signing HTTP server error: {:?}", e);
+                }
+            });
+            
             // Run SSH agent
             agent.run().await?;
+        }
+        #[cfg(not(unix))]
+        "daemon" => {
+            println!("[uid-agent] Starting system endpoint security agent daemon...");
+            let keys = Arc::new(AgentKeys::load_or_create()?);
+            println!("[uid-agent] Note: SSH agent mode is currently only supported on Unix-like systems (macOS / Linux).");
+            
+            // Run local signing HTTP server synchronously
+            server::start_web_server(keys).await?;
         }
         "approve" => {
             if args.len() < 3 {

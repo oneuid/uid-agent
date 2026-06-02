@@ -11,7 +11,9 @@ pub struct AgentKeys {
 
 impl AgentKeys {
     fn get_key_path() -> PathBuf {
-        let home = env::var("HOME").unwrap_or_else(|_| "/home/s".to_string());
+        let home = env::var("HOME")
+            .or_else(|_| env::var("USERPROFILE"))
+            .unwrap_or_else(|_| "/home/s".to_string());
         PathBuf::from(home).join(".uid").join("agent.key")
     }
 

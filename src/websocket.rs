@@ -29,6 +29,12 @@ impl AgentWebSocketClient {
         
         println!("[uid-agent] Connected to challenge channel. Waiting for requests...");
 
+        let prompt_msg = format!("Do you approve the authorization challenge login request: {}?", challenge_token);
+        if !prompt_gui_approval(&prompt_msg) {
+            println!("[uid-agent] Challenge approval denied by user.");
+            return Err("Challenge approval denied by user".into());
+        }
+
         // Generate signature of the challenge token representing enclave presence
         let signature = self.keys.sign(challenge_token.as_bytes());
         let signature_base64 = base64_encode(&signature.to_bytes());
@@ -252,4 +258,37 @@ impl SimpleHttpRequest {
         
         Ok(SimpleHttpResponse { status_code, body })
     }
+}
+
+fn prompt_gui_approval(message: &str) -> bool {
+    #[cfg(target_os = "linux")]
+    {
+        let output = std::process::Command::new("zenity")
+            .args([
+                "--question",
+                "--title=UID.one Enclave Approval",
+                &format!("--text={}", message)
+            ])
+            .output();
+        if let Ok(out) = output {
+            return out.status.success();
+        }
+    }
+    #[cfg(target_os = "macos")]
+    {
+        let script = format!(
+            "display dialog \"{}\" buttons {{\"Deny\", \"Approve\"}} default button \"Approve\" with title \"UID.one\"",
+            message
+        );
+        let output = std::process::Command::new("osascript")
+            .args(["-e", &script])
+            .output();
+        if let Ok(out) = output {
+            if out.status.success() {
+                let stdout = String::from_utf8_lossy(&out.stdout);
+                return stdout.contains("button returned:Approve");
+            }
+        }
+    }
+    true
 }

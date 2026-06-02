@@ -1,13 +1,25 @@
 # UID Agent
 
-A system-level endpoint security agent written in Rust, leveraging eBPF to provide continuous session integrity monitoring and hardware-bound identity attestation.
+A cross-platform endpoint security agent written in Rust, providing continuous session integrity monitoring and hardware-bound identity attestation.
 
-For detailed architectural specifications, please see the [UID Platform Specifications](../uid-web/docs/uid-platform-specs.md).
+**Supported platforms:** Linux · macOS · Windows
+
+For detailed architectural specifications, see the [UID Platform Specifications](../uid-web/docs/uid-platform-specs.md).
+
+## Platform Support
+
+| Platform | Disk Encryption | Firewall | Kernel/OS | Notes |
+|----------|----------------|----------|-----------|-------|
+| Linux    | LUKS / dm-crypt | ufw / iptables | `/proc` + `/sys` | eBPF features on Kernel 5.8+ |
+| macOS    | FileVault 2     | Application Firewall (socketfilterfw) | `sw_vers` / `sysctl` | Requires macOS 12+ |
+| Windows  | BitLocker       | Windows Defender Firewall | PowerShell / WMI | Requires Windows 10+ |
 
 ## Prerequisites
+
 - [Rust](https://rustup.rs/) (1.75+)
-- Linux Kernel 5.8+ (for eBPF features)
-- `libbpf` and `clang` (for compiling eBPF probes)
+- **Linux only:** `libbpf` and `clang` (for eBPF probes, Kernel 5.8+)
+- **macOS:** No extra deps. Xcode CLT recommended.
+- **Windows:** PowerShell 5.1+ (pre-installed on Windows 10/11)
 
 ## Getting Started
 
@@ -19,20 +31,38 @@ For detailed architectural specifications, please see the [UID Platform Specific
 
 2. **Build the agent**
    ```bash
+   # Native platform
    cargo build --release
+
+   # Cross-compile for Windows (from Linux/macOS):
+   # rustup target add x86_64-pc-windows-gnu
+   # cargo build --release --target x86_64-pc-windows-gnu
    ```
 
-3. **Run (Requires Root)**
+3. **Run**
    ```bash
-   sudo ./target/release/uid-agent
+   # Linux/macOS
+   ./target/release/uid-agent posture
+
+   # Windows
+   .\target\release\uid-agent.exe posture
    ```
+
+## Commands
+
+```
+uid-agent register    — Generate hardware-bound Ed25519 keypair
+uid-agent posture     — Collect device compliance posture (SOC 2 evidence)
+uid-agent sign <data> — Cryptographically sign a payload
+uid-agent daemon      — Run background SSH agent socket
+uid-agent approve <token> — Approve an authentication challenge
+```
 
 ## Development
-- eBPF probes should be placed in `src/bpf/`.
-- User-space agent logic is in `src/`.
+
+- eBPF probes (Linux only) go in `src/bpf/`
+- Platform implementations: `src/posture.rs` uses `#[cfg(target_os)]` compile-time dispatch
 
 ## License
 
-This project is licensed under the [Apache License 2.0](LICENSE). 
-
-By open-sourcing our endpoint agent, we ensure complete transparency in how eBPF probes and hardware attestations are handled at the OS level. We welcome community audits and contributions.
+[Apache License 2.0](LICENSE) — Open source for complete transparency in how endpoint attestation is handled.
