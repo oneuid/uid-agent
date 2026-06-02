@@ -52,29 +52,23 @@ if (Get-Command "pkcs11-tool" -ErrorAction SilentlyContinue) {
 
 if (-not $HasPkcs11) {
     Write-Host "[uid-agent] OpenSC / pkcs11-tool is required for USB Token signing but not found."
-    Write-Host "[uid-agent] Downloading and installing OpenSC silently..."
+    Write-Host "[uid-agent] Downloading and launching OpenSC installation wizard..."
     
-    $IsAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
-    if (-not $IsAdmin) {
-        Write-Warning "[uid-agent] Administrative privileges are required to install OpenSC automatically."
-        Write-Warning "To enable USB Token support, please re-run this installation command in an Administrator PowerShell window."
-    } else {
-        $MsiPath = Join-Path $env:TEMP "OpenSC-0.25.1_win64.msi"
-        $MsiUri = "https://github.com/OpenSC/OpenSC/releases/download/0.25.1/OpenSC-0.25.1_win64.msi"
-        try {
-            Invoke-WebRequest -Uri $MsiUri -OutFile $MsiPath -UseBasicParsing
-            Write-Host "[uid-agent] Running silent MSI installer..."
-            $InstallProcess = Start-Process msiexec.exe -ArgumentList "/i `"$MsiPath`" /qn /norestart" -Wait -PassThru
-            if ($InstallProcess.ExitCode -eq 0) {
-                Write-Host "[uid-agent] OpenSC installed successfully."
-            } else {
-                Write-Warning "[uid-agent] OpenSC silent installation completed with exit code $($InstallProcess.ExitCode)."
-                Write-Warning "You may need to download and install OpenSC manually from: https://github.com/OpenSC/OpenSC/releases"
-            }
-        } catch {
-            Write-Warning "[uid-agent] Failed to install OpenSC automatically: $_"
-            Write-Warning "Please download and install OpenSC manually from: https://github.com/OpenSC/OpenSC/releases"
+    $MsiPath = Join-Path $env:TEMP "OpenSC-0.25.1_win64.msi"
+    $MsiUri = "https://github.com/OpenSC/OpenSC/releases/download/0.25.1/OpenSC-0.25.1_win64.msi"
+    try {
+        Invoke-WebRequest -Uri $MsiUri -OutFile $MsiPath -UseBasicParsing
+        Write-Host "[uid-agent] Running OpenSC installer (please click 'Yes' on the Windows permission prompt)..."
+        $InstallProcess = Start-Process msiexec.exe -ArgumentList "/i `"$MsiPath`"" -Wait -PassThru
+        if ($InstallProcess.ExitCode -eq 0) {
+            Write-Host "[uid-agent] OpenSC installed successfully."
+        } else {
+            Write-Warning "[uid-agent] OpenSC installation finished with exit code $($InstallProcess.ExitCode)."
+            Write-Warning "You may need to download and install OpenSC manually from: https://github.com/OpenSC/OpenSC/releases"
         }
+    } catch {
+        Write-Warning "[uid-agent] Failed to download or install OpenSC: $_"
+        Write-Warning "Please download and install OpenSC manually from: https://github.com/OpenSC/OpenSC/releases"
     }
 }
 
