@@ -6,6 +6,26 @@ A cross-platform endpoint security agent written in Rust, providing continuous s
 
 For detailed architectural specifications, see the [UID Platform Specifications](../uid-web/docs/uid-platform-specs.md).
 
+## Installation
+
+For normal users who do not have Rust/Cargo installed, you can install the agent with a single command line. This will download the precompiled binary, install it to your user local directory, and register a background daemon service.
+
+### Linux
+
+Run the following command in your terminal:
+```bash
+curl -sSL https://raw.githubusercontent.com/oneuid/uid-agent/main/install.sh | bash
+```
+
+### Windows
+
+Run the following command in PowerShell:
+```powershell
+Invoke-Expression (Invoke-WebRequest -Uri https://raw.githubusercontent.com/oneuid/uid-agent/main/install.ps1 -UseBasicParsing).Content
+```
+
+---
+
 ## Platform Support
 
 | Platform | Disk Encryption | Firewall | Kernel/OS | Notes |
@@ -14,18 +34,18 @@ For detailed architectural specifications, see the [UID Platform Specifications]
 | macOS    | FileVault 2     | Application Firewall (socketfilterfw) | `sw_vers` / `sysctl` | Requires macOS 12+ |
 | Windows  | BitLocker       | Windows Defender Firewall | PowerShell / WMI | Requires Windows 10+ |
 
-## Prerequisites
+## Prerequisites (Build from Source)
 
 - [Rust](https://rustup.rs/) (1.75+)
 - **Linux only:** `libbpf` and `clang` (for eBPF probes, Kernel 5.8+)
 - **macOS:** No extra deps. Xcode CLT recommended.
 - **Windows:** PowerShell 5.1+ (pre-installed on Windows 10/11)
 
-## Getting Started
+## Manual Build and Run
 
 1. **Clone the repository**
    ```bash
-   git clone <repo-url>
+   git clone git@github.com:oneuid/uid-agent.git
    cd uid-agent
    ```
 
