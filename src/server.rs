@@ -622,9 +622,85 @@ pub fn get_usb_certificates() -> Vec<serde_json::Value> {
     
     let mut certs = Vec::new();
     
-    if let Some((driver, label, login_required)) = detect_active_driver_and_label() {
-        if login_required {
-            // For tokens requiring login, return placeholder to avoid slow objects listing before login
+    if let Some((driver, label, _login_required)) = detect_active_driver_and_label() {
+        // Try listing certificates
+        let output = Command::new(get_pkcs11_tool_path(Some(&driver)))
+            .args(["--module", &driver, "--list-objects", "--type", "cert"])
+            .output();
+            
+        let mut found_certs = false;
+        if let Ok(out) = output {
+            let stdout = String::from_utf8_lossy(&out.stdout);
+            let mut current_label = None;
+            let mut current_id = None;
+            
+            for line in stdout.lines() {
+                let line = line.trim();
+                if line.contains("label:") {
+                    let lbl = line.split(':').nth(1).unwrap_or("").trim().trim_matches('"').to_string();
+                    current_label = Some(lbl);
+                } else if line.contains("ID:") {
+                    let id = line.split(':').nth(1).unwrap_or("").trim().to_string();
+                    current_id = Some(id);
+                }
+                
+                if let (Some(lbl), Some(id)) = (&current_label, &current_id) {
+                    let home = get_home_dir();
+                    let temp_cert_path = format!("{}/.uid/temp_cert_{}.der", home, id);
+                    
+                    let read_output = Command::new(get_pkcs11_tool_path(Some(&driver)))
+                        .args([
+                            "--module", &driver,
+                            "--read-object",
+                            "--type", "cert",
+                            "--id", id,
+                            "--output-file", &temp_cert_path
+                        ])
+                        .output();
+                        
+                    let mut cert_data = String::new();
+                    let mut valid_from = "2024-01-01".to_string();
+                    let mut valid_to = "2029-12-31".to_string();
+                    let mut subject_name = lbl.clone();
+                    let mut issuer_name = label.clone();
+                    let mut serial_num = "N/A".to_string();
+
+                    if let Ok(out) = read_output {
+                        if out.status.success() {
+                            if let Ok(bytes) = fs::read(&temp_cert_path) {
+                                cert_data = hex::encode(&bytes);
+                                if let Some((vf, vt, sub, iss, ser)) = parse_cert_info(&bytes) {
+                                    valid_from = vf;
+                                    valid_to = vt;
+                                    subject_name = sub;
+                                    issuer_name = iss;
+                                    serial_num = ser;
+                                }
+                            }
+                        }
+                    }
+                    let _ = fs::remove_file(&temp_cert_path);
+
+                    certs.push(json!({
+                        "id": format!("usb_{}", id),
+                        "label": subject_name.clone(),
+                        "subject": subject_name.clone(),
+                        "issuer": issuer_name.clone(),
+                        "valid_from": valid_from.clone(),
+                        "valid_to": valid_to.clone(),
+                        "validTo": valid_to.clone(),
+                        "serial": serial_num.clone(),
+                        "certData": cert_data
+                    }));
+                    current_label = None;
+                    current_id = None;
+                    found_certs = true;
+                }
+            }
+        }
+        
+        // If the card hides certificates before login, or no certs found, return a placeholder using the token label
+        if !found_certs {
             certs.push(json!({
                 "id": "usb_auto_detected",
                 "label": label.clone(),
@@ -634,95 +710,6 @@ pub fn get_usb_certificates() -> Vec<serde_json::Value> {
                 "valid_to": "2029-12-31",
                 "validTo": "2029-12-31"
             }));
-        } else {
-            // Try listing certificates
-            let output = Command::new(get_pkcs11_tool_path(Some(&driver)))
-                .args(["--module", &driver, "--list-objects", "--type", "cert"])
-                .output();
-                
-            let mut found_certs = false;
-            if let Ok(out) = output {
-                let stdout = String::from_utf8_lossy(&out.stdout);
-                let mut current_label = None;
-                let mut current_id = None;
-                
-                for line in stdout.lines() {
-                    let line = line.trim();
-                    if line.contains("label:") {
-                        let lbl = line.split(':').nth(1).unwrap_or("").trim().trim_matches('"').to_string();
-                        current_label = Some(lbl);
-                    } else if line.contains("ID:") {
-                        let id = line.split(':').nth(1).unwrap_or("").trim().to_string();
-                        current_id = Some(id);
-                    }
-                    
-                    if let (Some(lbl), Some(id)) = (&current_label, &current_id) {
-                        let home = get_home_dir();
-                        let temp_cert_path = format!("{}/.uid/temp_cert_{}.der", home, id);
-                        
-                        let read_output = Command::new(get_pkcs11_tool_path(Some(&driver)))
-                            .args([
-                                "--module", &driver,
-                                "--read-object",
-                                "--type", "cert",
-                                "--id", id,
-                                "--output-file", &temp_cert_path
-                            ])
-                            .output();
-                            
-                        let mut cert_data = String::new();
-                        let mut valid_from = "2024-01-01".to_string();
-                        let mut valid_to = "2029-12-31".to_string();
-                        let mut subject_name = lbl.clone();
-                        let mut issuer_name = label.clone();
-                        let mut serial_num = "N/A".to_string();
-
-                        if let Ok(out) = read_output {
-                            if out.status.success() {
-                                if let Ok(bytes) = fs::read(&temp_cert_path) {
-                                    cert_data = hex::encode(&bytes);
-                                    if let Some((vf, vt, sub, iss, ser)) = parse_cert_info(&bytes) {
-                                        valid_from = vf;
-                                        valid_to = vt;
-                                        subject_name = sub;
-                                        issuer_name = iss;
-                                        serial_num = ser;
-                                    }
-                                }
-                            }
-                        }
-                        let _ = fs::remove_file(&temp_cert_path);
-    
-                        certs.push(json!({
-                            "id": format!("usb_{}", id),
-                            "label": subject_name.clone(),
-                            "subject": subject_name.clone(),
-                            "issuer": issuer_name.clone(),
-                            "valid_from": valid_from.clone(),
-                            "valid_to": valid_to.clone(),
-                            "validTo": valid_to.clone(),
-                            "serial": serial_num.clone(),
-                            "certData": cert_data
-                        }));
-                        current_label = None;
-                        current_id = None;
-                        found_certs = true;
-                    }
-                }
-            }
-            
-            // If the card hides certificates before login, return a placeholder using the token label
-            if !found_certs {
-                certs.push(json!({
-                    "id": "usb_auto_detected",
-                    "label": label.clone(),
-                    "subject": label.clone(),
-                    "issuer": label.clone(),
-                    "valid_from": "2024-01-01",
-                    "valid_to": "2029-12-31",
-                    "validTo": "2029-12-31"
-                }));
-            }
         }
     }
     

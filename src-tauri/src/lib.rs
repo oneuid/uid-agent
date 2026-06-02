@@ -18,9 +18,33 @@ struct UserProfile {
     avatar: Option<String>,
 }
 
+fn get_home_dir() -> String {
+    if cfg!(target_os = "windows") {
+        if let Ok(profile) = std::env::var("USERPROFILE") {
+            return profile;
+        }
+        let drive = std::env::var("HOMEDRIVE").unwrap_or_else(|_| "C:".to_string());
+        if let Ok(path) = std::env::var("HOMEPATH") {
+            return format!("{}{}", drive, path);
+        }
+        "C:\\".to_string()
+    } else {
+        if let Ok(home) = std::env::var("HOME") {
+            return home;
+        }
+        if let Ok(user) = std::env::var("USER") {
+            let path = format!("/home/{}", user);
+            if std::path::Path::new(&path).exists() {
+                return path;
+            }
+        }
+        "/home/s".to_string()
+    }
+}
+
 #[tauri::command]
 fn get_user_profile() -> Option<UserProfile> {
-    let home = std::env::var("HOME").unwrap_or_else(|_| "/home/s".to_string());
+    let home = get_home_dir();
     let path = format!("{}/.config/uid/user.json", home);
     if let Ok(content) = std::fs::read_to_string(path) {
         serde_json::from_str::<UserProfile>(&content).ok()
@@ -31,7 +55,7 @@ fn get_user_profile() -> Option<UserProfile> {
 
 #[tauri::command]
 fn logout_user() -> Result<(), String> {
-    let home = std::env::var("HOME").unwrap_or_else(|_| "/home/s".to_string());
+    let home = get_home_dir();
     let path = format!("{}/.config/uid/user.json", home);
     let _ = std::fs::remove_file(path);
     Ok(())
@@ -197,9 +221,7 @@ fn get_certificates() -> Vec<serde_json::Value> {
 
 #[tauri::command]
 fn get_signature_history() -> Vec<serde_json::Value> {
-    let home = std::env::var("HOME")
-        .or_else(|_| std::env::var("USERPROFILE"))
-        .unwrap_or_else(|_| "/home/s".to_string());
+    let home = get_home_dir();
     let path = format!("{}/.uid/signature_history.json", home);
     if let Ok(content) = std::fs::read_to_string(&path) {
         if let Ok(json_val) = serde_json::from_str::<serde_json::Value>(&content) {
@@ -251,7 +273,7 @@ fn pin_to_dock(app_id: String) -> Result<String, String> {
 
 #[tauri::command]
 async fn check_for_updates() -> Result<String, String> {
-    let current_version = "3.0.1"; // matches tauri.conf.json
+    let current_version = "3.0.2"; // matches tauri.conf.json
 
     // Fetch latest version string from raw.githubusercontent.com
     let latest_version = {
@@ -359,7 +381,7 @@ pub fn run() {
             });
 
             // Write custom app icons to user local share icons directory
-            let home = std::env::var("HOME").unwrap_or_else(|_| "/home/s".to_string());
+            let home = get_home_dir();
             let icons_dir = format!("{}/.local/share/icons", home);
             let _ = std::fs::create_dir_all(&icons_dir);
 

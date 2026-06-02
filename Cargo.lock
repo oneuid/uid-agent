@@ -894,7 +894,7 @@ checksum = "40ce102ab67701b8526c123c1bab5cbe42d7040ccfd0f64af1a385808d2f43de"
 
 [[package]]
 name = "uid-agent"
-version = "2.2.0"
+version = "2.2.1"
 dependencies = [
  "ed25519-dalek",
  "futures-util",

@@ -205,7 +205,9 @@ mod linux {
     }
 
     fn check_ssh_keys_secure() -> bool {
-        let home = std::env::var("HOME").unwrap_or_else(|_| "/home/s".to_string());
+        let home = std::env::var("HOME")
+            .or_else(|_| std::env::var("USERPROFILE"))
+            .unwrap_or_else(|_| "/home/s".to_string());
         let ssh_dir = std::path::Path::new(&home).join(".ssh");
         if !ssh_dir.exists() {
             return true;
