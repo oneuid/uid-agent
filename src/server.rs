@@ -218,64 +218,123 @@ fn write_persistent_certs(sig: &str, certs: &[serde_json::Value]) {
 }
 
 fn get_usb_devices_signature() -> String {
-    let output = Command::new("lsusb").output();
-    if let Ok(out) = output {
-        let stdout = String::from_utf8_lossy(&out.stdout);
-        let mut devices = Vec::new();
-        for line in stdout.lines() {
-            if let Some(pos) = line.find("ID ") {
-                let id_part = &line[pos + 3..];
-                if id_part.len() >= 9 {
-                    devices.push(id_part[..9].to_string());
+    #[cfg(target_os = "windows")]
+    {
+        let output = Command::new("powershell")
+            .args([
+                "-NoProfile",
+                "-Command",
+                "[System.Management.ManagementObjectSearcher]::new('SELECT PNPDeviceID FROM Win32_PnPEntity WHERE PNPDeviceID LIKE ''USB%''').Get() | ForEach-Object { $_.PNPDeviceID }"
+            ])
+            .output();
+        if let Ok(out) = output {
+            let stdout = String::from_utf8_lossy(&out.stdout);
+            let mut devices: Vec<String> = stdout.lines()
+                .map(|l| l.trim().to_string())
+                .filter(|l| !l.is_empty())
+                .collect();
+            devices.sort();
+            devices.join(",")
+        } else {
+            String::new()
+        }
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let output = Command::new("lsusb").output();
+        if let Ok(out) = output {
+            let stdout = String::from_utf8_lossy(&out.stdout);
+            let mut devices = Vec::new();
+            for line in stdout.lines() {
+                if let Some(pos) = line.find("ID ") {
+                    let id_part = &line[pos + 3..];
+                    if id_part.len() >= 9 {
+                        devices.push(id_part[..9].to_string());
+                    }
                 }
             }
+            devices.sort();
+            devices.join(",")
+        } else {
+            String::new()
         }
-        devices.sort();
-        devices.join(",")
-    } else {
-        String::new()
     }
 }
 
 fn is_smartcard_reader_present(sig_string: &str) -> bool {
-    let stdout = if sig_string.is_empty() {
-        let output = Command::new("lsusb").output();
-        if let Ok(out) = output {
-            String::from_utf8_lossy(&out.stdout).to_string()
-        } else {
-            return true;
-        }
-    } else {
-        let output = Command::new("lsusb").output();
-        if let Ok(out) = output {
-            String::from_utf8_lossy(&out.stdout).to_string()
-        } else {
-            sig_string.to_string()
-        }
-    };
-
-    let stdout_lower = stdout.to_lowercase();
-    let keywords = [
-        "token", "smartcard", "smart card", "reader", "epass", "feitian",
-        "gemalto", "safenet", "yubikey", "ccid", "pkcs", "cherry",
-        "omnikey", "identive", "etoken", "vsign", "viettel", "vnpt",
-        "fpt", "bkav", "misa"
-    ];
-    for kw in &keywords {
-        if stdout_lower.contains(kw) {
-            return true;
-        }
-    }
-    false
-}
-
-fn get_pkcs11_tool_path() -> String {
     #[cfg(target_os = "windows")]
     {
-        let paths = [
-            "C:\\Program Files\\OpenSC Project\\OpenSC\\bin\\pkcs11-tool.exe",
-            "C:\\Program Files (x86)\\OpenSC Project\\OpenSC\\bin\\pkcs11-tool.exe",
+        let output = Command::new("powershell")
+            .args([
+                "-NoProfile",
+                "-Command",
+                "[System.Management.ManagementObjectSearcher]::new('SELECT Name FROM Win32_PnPEntity WHERE ClassGuid = ''{50dd5230-ba8a-11d1-bf5d-0000f805f530}''').Get().Count"
+            ])
+            .output();
+        if let Ok(out) = output {
+            let count_str = String::from_utf8_lossy(&out.stdout).trim().to_string();
+            if let Ok(count) = count_str.parse::<i32>() {
+                return count > 0;
+            }
+        }
+        true // fallback
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let stdout = if sig_string.is_empty() {
+            let output = Command::new("lsusb").output();
+            if let Ok(out) = output {
+                String::from_utf8_lossy(&out.stdout).to_string()
+            } else {
+                return true;
+            }
+        } else {
+            let output = Command::new("lsusb").output();
+            if let Ok(out) = output {
+                String::from_utf8_lossy(&out.stdout).to_string()
+            } else {
+                sig_string.to_string()
+            }
+        };
+
+        let stdout_lower = stdout.to_lowercase();
+        let keywords = [
+            "token", "smartcard", "smart card", "reader", "epass", "feitian",
+            "gemalto", "safenet", "yubikey", "ccid", "pkcs", "cherry",
+            "omnikey", "identive", "etoken", "vsign", "viettel", "vnpt",
+            "fpt", "bkav", "misa"
         ];
+        for kw in &keywords {
+            if stdout_lower.contains(kw) {
+                return true;
+            }
+        }
+        false
+    }
+}
+
+fn get_pkcs11_tool_path(_driver: Option<&str>) -> String {
+    #[cfg(target_os = "windows")]
+    {
+        let paths = if let Some(drv) = _driver {
+            let drv_lower = drv.to_lowercase();
+            if drv_lower.contains("syswow64") || drv_lower.contains("x86") {
+                vec![
+                    "C:\\Program Files (x86)\\OpenSC Project\\OpenSC\\bin\\pkcs11-tool.exe",
+                    "C:\\Program Files\\OpenSC Project\\OpenSC\\bin\\pkcs11-tool.exe",
+                ]
+            } else {
+                vec![
+                    "C:\\Program Files\\OpenSC Project\\OpenSC\\bin\\pkcs11-tool.exe",
+                    "C:\\Program Files (x86)\\OpenSC Project\\OpenSC\\bin\\pkcs11-tool.exe",
+                ]
+            }
+        } else {
+            vec![
+                "C:\\Program Files\\OpenSC Project\\OpenSC\\bin\\pkcs11-tool.exe",
+                "C:\\Program Files (x86)\\OpenSC Project\\OpenSC\\bin\\pkcs11-tool.exe",
+            ]
+        };
         for p in &paths {
             if std::path::Path::new(p).exists() {
                 return p.to_string();
@@ -286,7 +345,7 @@ fn get_pkcs11_tool_path() -> String {
 }
 
 fn check_driver_valid(driver: &str) -> Option<(String, bool)> {
-    let output = Command::new(get_pkcs11_tool_path())
+    let output = Command::new(get_pkcs11_tool_path(Some(driver)))
         .args(["--module", driver, "--list-slots"])
         .output();
 
@@ -364,19 +423,33 @@ fn get_driver_paths() -> Vec<String> {
     #[cfg(not(unix))]
     {
         let localappdata = std::env::var("LOCALAPPDATA").unwrap_or_default();
-        let mut standard = vec![
-            format!("{}\\uid-agent\\viettel-ca_v6.dll", localappdata),
-            "C:\\Windows\\System32\\vsignspkcs11.dll".to_string(),
-            "C:\\Windows\\System32\\viettel-ca_v2.dll".to_string(),
-            "C:\\Windows\\System32\\vnpt-pkcs11.dll".to_string(),
-            "C:\\Windows\\System32\\npki-pkcs11.dll".to_string(),
-            "C:\\Windows\\System32\\fpt-pkcs11.dll".to_string(),
-            "C:\\Windows\\System32\\bkav-pkcs11.dll".to_string(),
-            "C:\\Windows\\System32\\vina-pkcs11.dll".to_string(),
-            "C:\\Windows\\System32\\misa-pkcs11.dll".to_string(),
-            "C:\\Program Files\\OpenSC Project\\OpenSC\\pkcs11\\opensc-pkcs11.dll".to_string(),
-            "C:\\Program Files (x86)\\OpenSC Project\\OpenSC\\pkcs11\\opensc-pkcs11.dll".to_string(),
+        let mut standard = Vec::new();
+        
+        let dll_names = [
+            "vsignspkcs11.dll",
+            "viettel-ca_v2.dll",
+            "viettel-ca.dll",
+            "vnpt-pkcs11.dll",
+            "npki-pkcs11.dll",
+            "fpt-pkcs11.dll",
+            "bkav-pkcs11.dll",
+            "vina-pkcs11.dll",
+            "misa-pkcs11.dll",
         ];
+        
+        standard.push(format!("{}\\uid-agent\\viettel-ca_v6.dll", localappdata));
+        
+        for name in &dll_names {
+            standard.push(format!("C:\\Windows\\System32\\{}", name));
+        }
+        
+        for name in &dll_names {
+            standard.push(format!("C:\\Windows\\SysWOW64\\{}", name));
+        }
+        
+        standard.push("C:\\Program Files\\OpenSC Project\\OpenSC\\pkcs11\\opensc-pkcs11.dll".to_string());
+        standard.push("C:\\Program Files (x86)\\OpenSC Project\\OpenSC\\pkcs11\\opensc-pkcs11.dll".to_string());
+        
         custom_drivers.append(&mut standard);
         custom_drivers
     }
@@ -563,7 +636,7 @@ pub fn get_usb_certificates() -> Vec<serde_json::Value> {
             }));
         } else {
             // Try listing certificates
-            let output = Command::new(get_pkcs11_tool_path())
+            let output = Command::new(get_pkcs11_tool_path(Some(&driver)))
                 .args(["--module", &driver, "--list-objects", "--type", "cert"])
                 .output();
                 
@@ -587,7 +660,7 @@ pub fn get_usb_certificates() -> Vec<serde_json::Value> {
                         let home = get_home_dir();
                         let temp_cert_path = format!("{}/.uid/temp_cert_{}.der", home, id);
                         
-                        let read_output = Command::new(get_pkcs11_tool_path())
+                        let read_output = Command::new(get_pkcs11_tool_path(Some(&driver)))
                             .args([
                                 "--module", &driver,
                                 "--read-object",
@@ -1145,7 +1218,7 @@ async fn handle_connection(mut stream: TcpStream, keys: Arc<AgentKeys>) -> Resul
                     if is_probe {
                         // Probe: just read certificate after logging in (no signing required)
                         let temp_cert_path = format!("{}/temp_cert_{}.der", dot_uid, raw_id);
-                        let read_output = Command::new(get_pkcs11_tool_path())
+                        let read_output = Command::new(get_pkcs11_tool_path(Some(&driver)))
                             .args([
                                 "--module", &driver,
                                 "--login",
@@ -1171,7 +1244,7 @@ async fn handle_connection(mut stream: TcpStream, keys: Arc<AgentKeys>) -> Resul
 
                         if !read_ok && cert_id == "usb_auto_detected" {
                             // Fallback: list objects to find real ID
-                            let list_output = Command::new(get_pkcs11_tool_path())
+                            let list_output = Command::new(get_pkcs11_tool_path(Some(&driver)))
                                 .args([
                                     "--module", &driver,
                                     "--login",
@@ -1196,7 +1269,7 @@ async fn handle_connection(mut stream: TcpStream, keys: Arc<AgentKeys>) -> Resul
                             if let Some(rid) = resolved_id {
                                 raw_id = rid;
                                 let temp_cert_path2 = format!("{}/temp_cert_{}.der", dot_uid, raw_id);
-                                let read_output2 = Command::new(get_pkcs11_tool_path())
+                                let read_output2 = Command::new(get_pkcs11_tool_path(Some(&driver)))
                                     .args([
                                         "--module", &driver,
                                         "--login",
@@ -1239,7 +1312,7 @@ async fn handle_connection(mut stream: TcpStream, keys: Arc<AgentKeys>) -> Resul
                             
                             let _ = fs::write(&temp_hash_path, &hash_bytes);
                             
-                            let sign_output = Command::new(get_pkcs11_tool_path())
+                            let sign_output = Command::new(get_pkcs11_tool_path(Some(&driver)))
                                 .args([
                                     "--module", &driver,
                                     "--login",
@@ -1267,7 +1340,7 @@ async fn handle_connection(mut stream: TcpStream, keys: Arc<AgentKeys>) -> Resul
                                     // Only read cert data if requested as auto-detect (browser needs it to update state)
                                     if cert_id == "usb_auto_detected" {
                                         let temp_cert_path = format!("{}/temp_cert_{}.der", dot_uid, raw_id);
-                                        let read_output = Command::new(get_pkcs11_tool_path())
+                                        let read_output = Command::new(get_pkcs11_tool_path(Some(&driver)))
                                             .args([
                                                 "--module", &driver,
                                                 "--read-object",
