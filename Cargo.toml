@@ -1,6 +1,6 @@
 [package]
 name = "uid-agent"
-version = "2.2.0"
+version = "2.2.1"
 edition = "2021"
 description = "UID Agent — Cross-platform endpoint security agent (Linux / macOS / Windows)"
 
