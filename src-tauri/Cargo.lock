@@ -4146,7 +4146,7 @@ dependencies = [
 
 [[package]]
 name = "uid-agent-desktop"
-version = "3.0.3"
+version = "3.0.4"
 dependencies = [
  "log",
  "serde",

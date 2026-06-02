@@ -22,29 +22,7 @@ static USB_SIG_CACHE: OnceLock<Mutex<String>> = OnceLock::new();
 static CERTS_CACHE: OnceLock<Mutex<Vec<serde_json::Value>>> = OnceLock::new();
 static DRIVER_SIG_CACHE: OnceLock<Mutex<String>> = OnceLock::new();
 
-fn get_home_dir() -> String {
-    if cfg!(target_os = "windows") {
-        if let Ok(profile) = std::env::var("USERPROFILE") {
-            return profile;
-        }
-        let drive = std::env::var("HOMEDRIVE").unwrap_or_else(|_| "C:".to_string());
-        if let Ok(path) = std::env::var("HOMEPATH") {
-            return format!("{}{}", drive, path);
-        }
-        "C:\\".to_string()
-    } else {
-        if let Ok(home) = std::env::var("HOME") {
-            return home;
-        }
-        if let Ok(user) = std::env::var("USER") {
-            let path = format!("/home/{}", user);
-            if std::path::Path::new(&path).exists() {
-                return path;
-            }
-        }
-        "/tmp".to_string()
-    }
-}
+
 
 fn get_cached_driver() -> Option<(String, String, bool)> {
     let cache = DRIVER_CACHE.get_or_init(|| Mutex::new(None));
@@ -93,8 +71,8 @@ fn set_cached_certs(sig: String, certs: Vec<serde_json::Value>) {
 }
 
 fn read_persistent_certs(sig: &str) -> Option<Vec<serde_json::Value>> {
-    let home = get_home_dir();
-    let path = format!("{}/.uid/certs_cache.json", home);
+    let base_dir = crate::get_uid_data_dir();
+    let path = format!("{}/certs_cache.json", base_dir);
     if let Ok(content) = fs::read_to_string(&path) {
         if let Ok(json_val) = serde_json::from_str::<serde_json::Value>(&content) {
             if json_val["usb_signature"].as_str() == Some(sig) {
@@ -202,10 +180,8 @@ fn parse_cert_info(der_bytes: &[u8]) -> Option<(String, String, String, String, 
 }
 
 fn write_persistent_certs(sig: &str, certs: &[serde_json::Value]) {
-    let home = get_home_dir();
-    let dot_uid = format!("{}/.uid", home);
-    let _ = fs::create_dir_all(&dot_uid);
-    let path = format!("{}/certs_cache.json", dot_uid);
+    let base_dir = crate::get_uid_data_dir();
+    let path = format!("{}/certs_cache.json", base_dir);
     
     let mut active_driver = String::new();
     let mut active_label = String::new();
@@ -388,10 +364,10 @@ fn check_driver_valid(driver: &str) -> Option<(String, bool)> {
 }
 
 fn get_driver_paths() -> Vec<String> {
-    let home = get_home_dir();
+    let base_dir = crate::get_uid_data_dir();
     
     let mut custom_drivers = Vec::new();
-    let config_path = format!("{}/.uid/config.json", home);
+    let config_path = format!("{}/config.json", base_dir);
     if let Ok(config_str) = fs::read_to_string(&config_path) {
         if let Ok(config_json) = serde_json::from_str::<serde_json::Value>(&config_str) {
             if let Some(arr) = config_json["custom_drivers"].as_array() {
@@ -407,7 +383,7 @@ fn get_driver_paths() -> Vec<String> {
     #[cfg(unix)]
     {
         let mut standard = vec![
-            format!("{}/.uid/viettel-ca_v6.so", home),
+            format!("{}/viettel-ca_v6.so", base_dir),
             "/usr/lib/libvsignspkcs11.so".to_string(),
             "/usr/lib/libviettel-ca_v2.so".to_string(),
             "/usr/lib/libvsignspkcs11.so.1".to_string(),
@@ -656,8 +632,8 @@ pub fn get_usb_certificates() -> Vec<serde_json::Value> {
                 }
                 
                 if let (Some(lbl), Some(id)) = (&current_label, &current_id) {
-                    let home = get_home_dir();
-                    let temp_cert_path = format!("{}/.uid/temp_cert_{}.der", home, id);
+                    let base_dir = crate::get_uid_data_dir();
+                    let temp_cert_path = format!("{}/temp_cert_{}.der", base_dir, id);
                     
                     let read_output = new_command(get_pkcs11_tool_path(Some(&driver)))
                         .args([
@@ -894,8 +870,8 @@ async fn handle_connection(mut stream: TcpStream, keys: Arc<AgentKeys>) -> Resul
 
         if let Ok(req_json) = serde_json::from_str::<serde_json::Value>(body) {
             if let Some(new_path) = req_json["path"].as_str() {
-                let home = get_home_dir();
-                let config_path = format!("{}/.uid/config.json", home);
+                let base_dir = crate::get_uid_data_dir();
+                let config_path = format!("{}/config.json", base_dir);
                 
                 let mut custom_drivers = Vec::new();
                 if let Ok(config_str) = fs::read_to_string(&config_path) {
@@ -916,8 +892,6 @@ async fn handle_connection(mut stream: TcpStream, keys: Arc<AgentKeys>) -> Resul
                         "custom_drivers": custom_drivers
                     });
                     
-                    let dot_uid = format!("{}/.uid", home);
-                    let _ = fs::create_dir_all(&dot_uid);
                     let _ = fs::write(&config_path, new_config.to_string());
                     
                     clear_cached_driver();
@@ -960,10 +934,8 @@ async fn handle_connection(mut stream: TcpStream, keys: Arc<AgentKeys>) -> Resul
         };
 
         if let Ok(req_json) = serde_json::from_str::<serde_json::Value>(body) {
-            let home = get_home_dir();
-            let config_dir = format!("{}/.config/uid", home);
-            let _ = fs::create_dir_all(&config_dir);
-            let config_path = format!("{}/user.json", config_dir);
+            let base_dir = crate::get_uid_data_dir();
+            let config_path = format!("{}/user.json", base_dir);
             
             let token = req_json["token"].as_str().unwrap_or_default();
             let name = req_json["user"]["name"].as_str().unwrap_or_default();
@@ -1008,8 +980,8 @@ async fn handle_connection(mut stream: TcpStream, keys: Arc<AgentKeys>) -> Resul
     }
 
     if (method == "POST" || method == "GET") && path == "/auth/logout" {
-        let home = get_home_dir();
-        let path = format!("{}/.config/uid/user.json", home);
+        let base_dir = crate::get_uid_data_dir();
+        let path = format!("{}/user.json", base_dir);
         let _ = fs::remove_file(path);
 
         let res_body = json!({ "success": true }).to_string();
@@ -1027,8 +999,8 @@ async fn handle_connection(mut stream: TcpStream, keys: Arc<AgentKeys>) -> Resul
     }
 
     if method == "GET" && path == "/auth/profile" {
-        let home = get_home_dir();
-        let path = format!("{}/.config/uid/user.json", home);
+        let base_dir = crate::get_uid_data_dir();
+        let path = format!("{}/user.json", base_dir);
         
         let body = if let Ok(content) = fs::read_to_string(path) {
             if let Ok(profile_val) = serde_json::from_str::<serde_json::Value>(&content) {
@@ -1204,9 +1176,8 @@ async fn handle_connection(mut stream: TcpStream, keys: Arc<AgentKeys>) -> Resul
                         cert_id.trim_start_matches("usb_").to_string()
                     };
 
-                    let home = get_home_dir();
-                    let dot_uid = format!("{}/.uid", home);
-                    let _ = fs::create_dir_all(&dot_uid);
+                    let base_dir = crate::get_uid_data_dir();
+                    let dot_uid = base_dir;
 
                     let mut sig_hex = String::new();
                     let mut cert_data = String::new();
@@ -1744,8 +1715,8 @@ fn normalize_hash(input: &str) -> String {
 }
 
 fn read_signature_history() -> Vec<serde_json::Value> {
-    let home = get_home_dir();
-    let path = format!("{}/.uid/signature_history.json", home);
+    let base_dir = crate::get_uid_data_dir();
+    let path = format!("{}/signature_history.json", base_dir);
     if let Ok(content) = fs::read_to_string(&path) {
         if let Ok(json_val) = serde_json::from_str::<serde_json::Value>(&content) {
             if let Some(arr) = json_val.as_array() {
@@ -1764,10 +1735,8 @@ fn log_signature_to_history(
     origin: &str,
     referer: &str
 ) {
-    let home = get_home_dir();
-    let dot_uid = format!("{}/.uid", home);
-    let _ = fs::create_dir_all(&dot_uid);
-    let path = format!("{}/signature_history.json", dot_uid);
+    let base_dir = crate::get_uid_data_dir();
+    let path = format!("{}/signature_history.json", base_dir);
 
     let mut history = read_signature_history();
     

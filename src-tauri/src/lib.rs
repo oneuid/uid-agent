@@ -55,8 +55,8 @@ fn get_home_dir() -> String {
 
 #[tauri::command]
 fn get_user_profile() -> Option<UserProfile> {
-    let home = get_home_dir();
-    let path = format!("{}/.config/uid/user.json", home);
+    let base_dir = uid_agent::get_uid_data_dir();
+    let path = format!("{}/user.json", base_dir);
     if let Ok(content) = std::fs::read_to_string(path) {
         serde_json::from_str::<UserProfile>(&content).ok()
     } else {
@@ -66,8 +66,8 @@ fn get_user_profile() -> Option<UserProfile> {
 
 #[tauri::command]
 fn logout_user() -> Result<(), String> {
-    let home = get_home_dir();
-    let path = format!("{}/.config/uid/user.json", home);
+    let base_dir = uid_agent::get_uid_data_dir();
+    let path = format!("{}/user.json", base_dir);
     let _ = std::fs::remove_file(path);
     Ok(())
 }
@@ -232,8 +232,8 @@ fn get_certificates() -> Vec<serde_json::Value> {
 
 #[tauri::command]
 fn get_signature_history() -> Vec<serde_json::Value> {
-    let home = get_home_dir();
-    let path = format!("{}/.uid/signature_history.json", home);
+    let base_dir = uid_agent::get_uid_data_dir();
+    let path = format!("{}/signature_history.json", base_dir);
     if let Ok(content) = std::fs::read_to_string(&path) {
         if let Ok(json_val) = serde_json::from_str::<serde_json::Value>(&content) {
             if let Some(arr) = json_val.as_array() {
@@ -284,7 +284,7 @@ fn pin_to_dock(app_id: String) -> Result<String, String> {
 
 #[tauri::command]
 async fn check_for_updates() -> Result<String, String> {
-    let current_version = "3.0.3"; // matches tauri.conf.json
+    let current_version = "3.0.4"; // matches tauri.conf.json
 
     // Fetch latest version string from raw.githubusercontent.com
     let latest_version = {
