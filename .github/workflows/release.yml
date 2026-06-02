@@ -45,7 +45,7 @@ jobs:
 
       - name: Install UI dependencies
         run: pnpm install
-        cwd: ui
+        working-directory: ui
 
       - name: Build Tauri App and Draft Release
         uses: tauri-apps/tauri-action@v2
