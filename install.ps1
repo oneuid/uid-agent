@@ -30,7 +30,14 @@ if (-not (Test-Path $SourceExe -ErrorAction SilentlyContinue)) {
     Write-Host "[uid-agent] Local executable not found, downloading precompiled binary..."
     $SourceExe = Join-Path $env:TEMP "uid-agent.exe"
     $Uri = "https://raw.githubusercontent.com/oneuid/uid-agent/main/uid-agent.exe"
-    Invoke-WebRequest -Uri $Uri -OutFile $SourceExe -UseBasicParsing
+    try {
+        Invoke-WebRequest -Uri $Uri -OutFile $SourceExe -UseBasicParsing
+    } catch {
+        Write-Warning "[uid-agent] Failed to download precompiled Windows binary from GitHub (HTTP 404/Connection Error)."
+        Write-Warning "To install without compiling, please compile 'uid-agent.exe' and commit/push it to the root of the 'uid-agent' GitHub repository."
+        Write-Error "Please compile the project first on Windows using 'cargo build --release' and run '.\install.ps1' locally inside the cloned directory."
+        exit 1
+    }
 }
 
 # Copy binary to LocalAppData
