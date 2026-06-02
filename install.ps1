@@ -78,6 +78,11 @@ if (-not $HasPkcs11) {
     }
 }
 
+# Stop any running instances of uid-agent before copying to prevent file locking
+Write-Host "[uid-agent] Stopping running instances of uid-agent..."
+Get-Process -Name "uid-agent" -ErrorAction SilentlyContinue | Stop-Process -Force
+Start-Sleep -Seconds 1
+
 # Copy binary to LocalAppData
 $DestExe = Join-Path $InstallDir "uid-agent.exe"
 Copy-Item -Path $SourceExe -Destination $DestExe -Force
