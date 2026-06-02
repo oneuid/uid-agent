@@ -251,8 +251,94 @@ fn pin_to_dock(app_id: String) -> Result<String, String> {
 
 #[tauri::command]
 async fn check_for_updates() -> Result<String, String> {
-    tokio::time::sleep(std::time::Duration::from_millis(1500)).await;
-    Ok("v3.0.0".to_string())
+    let current_version = "3.0.1"; // matches tauri.conf.json
+
+    // Fetch latest version string from raw.githubusercontent.com
+    let latest_version = {
+        #[cfg(target_os = "windows")]
+        {
+            let output = Command::new("powershell")
+                .args([
+                    "-NoProfile",
+                    "-Command",
+                    "(Invoke-RestMethod -Uri 'https://raw.githubusercontent.com/oneuid/uid-agent/main/src-tauri/tauri.conf.json').version"
+                ])
+                .output();
+            if let Ok(out) = output {
+                String::from_utf8_lossy(&out.stdout).trim().to_string()
+            } else {
+                return Err("Failed to execute PowerShell update check".to_string());
+            }
+        }
+        #[cfg(not(target_os = "windows"))]
+        {
+            let output = Command::new("sh")
+                .args([
+                    "-c",
+                    "curl -s https://raw.githubusercontent.com/oneuid/uid-agent/main/src-tauri/tauri.conf.json | grep '\"version\"' | cut -d '\"' -f 4"
+                ])
+                .output();
+            if let Ok(out) = output {
+                String::from_utf8_lossy(&out.stdout).trim().to_string()
+            } else {
+                return Err("Failed to execute curl update check".to_string());
+            }
+        }
+    };
+
+    if latest_version.is_empty() {
+        return Err("Latest version info could not be fetched from GitHub.".to_string());
+    }
+
+    if latest_version == current_version {
+        return Ok(format!("v{} (Already up to date)", current_version));
+    }
+
+    // Trigger update install
+    #[cfg(target_os = "windows")]
+    {
+        let msi_url = format!(
+            "https://github.com/oneuid/uid-agent/releases/download/v{}/uid-agent-desktop_{}_x64_en-US.msi",
+            latest_version, latest_version
+        );
+        let status = Command::new("powershell")
+            .args([
+                "-NoProfile",
+                "-Command",
+                &format!("Start-Process msiexec.exe -ArgumentList '/i \"{}\" /passive' -Verb RunAs", msi_url)
+            ])
+            .status();
+
+        if let Ok(stat) = status {
+            if stat.success() {
+                std::process::exit(0);
+            }
+        }
+        return Err(format!("Failed to trigger installation of v{}", latest_version));
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        // Run install.sh script from main branch
+        let status = Command::new("sh")
+            .args([
+                "-c",
+                "curl -fsSL https://raw.githubusercontent.com/oneuid/uid-agent/main/install.sh | bash"
+            ])
+            .status();
+
+        if let Ok(stat) = status {
+            if stat.success() {
+                std::process::exit(0);
+            }
+        }
+        return Err(format!("Failed to run update script for v{}", latest_version));
+    }
+
+    #[cfg(not(any(target_os = "windows", target_os = "linux")))]
+    {
+        return Err(format!("New version v{} is available. Please download it from GitHub.", latest_version));
+    }
 }
 
 
