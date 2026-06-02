@@ -1,15 +1,11 @@
-mod crypto;
-mod posture;
-mod ssh_agent;
-mod websocket;
-mod server;
-
 use std::env;
 use std::sync::Arc;
-use crate::crypto::AgentKeys;
+use uid_agent::crypto::AgentKeys;
 #[cfg(unix)]
-use crate::ssh_agent::SshAgent;
-use crate::websocket::AgentWebSocketClient;
+use uid_agent::ssh_agent::SshAgent;
+use uid_agent::websocket::AgentWebSocketClient;
+use uid_agent::posture;
+use uid_agent::server;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {

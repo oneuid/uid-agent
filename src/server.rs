@@ -402,7 +402,7 @@ fn detect_active_driver_and_label() -> Option<(String, String, bool)> {
 }
 
 // Scans plugged-in USB Tokens using pkcs11-tool
-fn get_usb_certificates() -> Vec<serde_json::Value> {
+pub fn get_usb_certificates() -> Vec<serde_json::Value> {
     let sig = get_usb_devices_signature();
     
     // Check if smartcard/token reader is connected at all

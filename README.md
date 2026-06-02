@@ -1,88 +1,82 @@
 # UID Agent
 
-A cross-platform endpoint security agent written in Rust, providing continuous session integrity monitoring and hardware-bound identity attestation.
+A cross-platform endpoint security agent written in Rust, providing continuous session integrity monitoring, hardware-bound identity attestation, and containerized secure workspaces.
 
-**Supported platforms:** Linux · macOS · Windows
+**Supported platforms:** Linux (Ubuntu/Debian) · macOS · Windows
 
 For detailed architectural specifications, see the [UID Platform Specifications](../uid-web/docs/uid-platform-specs.md).
 
-## Installation
+---
 
-For normal users who do not have Rust/Cargo installed, you can install the agent with a single command line. This will download the precompiled binary, install it to your user local directory, and register a background daemon service.
+## UID Desktop App (GUI & Linux App Sandbox)
 
-### Linux
+UID Agent now features a beautiful **Tauri-powered Desktop GUI Dashboard** and a **Secure App Sandbox** that lets you run Windows enterprise applications (like Zalo Messenger) safely inside containerized Wine Docker sandboxes on Linux.
 
-Run the following command in your terminal:
+### Key Features:
+- **SOC 2 Posture Dashboard**: View device compliance controls (disk encryption, firewall status, secure boot, OS updates).
+- **USB Security Tokens**: Scan and view plugged-in PKCS#11 hardware keys and certificates.
+- **Enterprise App Sandbox (Docker + Wine)**: Run Windows applications locally in a secure, containerized sandbox. 
+- **System Tray Integration**: Minimizes cleanly to the Linux system tray, protecting the background daemon from accidental exits.
+- **Persistent Data Volume**: All sandbox app data, chat logs, and logins are persisted locally on the host at `~/.local/share/uid/apps/` - ensuring updates to the agent never lose your work.
+
+---
+
+## Desktop GUI Build & Installation (Linux)
+
+### 1. Install Build Dependencies
+To compile Tauri and its windowing controls on Debian/Ubuntu, run:
+```bash
+sudo apt update && sudo apt install -y libdbus-1-dev pkg-config libwebkit2gtk-4.1-dev libssl-dev libgtk-3-dev libayatana-appindicator3-dev
+```
+
+### 2. Build and Package (.deb)
+To compile and package the desktop app as a native Debian installer:
+```bash
+# Navigate to the workspace and build
+npx -y @tauri-apps/cli build
+```
+This will compile the Rust core and React interface in release mode and generate:
+- **Debian Package**: `src-tauri/target/release/bundle/deb/uid-agent-desktop_3.0.0_amd64.deb`
+- **Portable AppImage**: `src-tauri/target/release/bundle/appimage/uid-agent-desktop_3.0.0_amd64.AppImage`
+
+### 3. Install the App
+Install the compiled Debian package on Ubuntu:
+```bash
+sudo dpkg -i src-tauri/target/release/bundle/deb/uid-agent-desktop_3.0.0_amd64.deb
+```
+
+### 4. Pin to Ubuntu Dock/Toolbar
+Once installed via `.deb`:
+1. Press the **Super (Windows) key** to open the GNOME Applications menu.
+2. Search for **"UID Agent"**.
+3. Right-click the UID Agent icon and select **"Add to Favorites"** (Thêm vào danh sách ưa thích).
+4. The app is now pinned to your toolbar/Dock for quick launch.
+
+---
+
+## CLI Installation & Usage
+
+For headless servers or environments where only the CLI daemon is required:
+
+### Linux CLI installation:
 ```bash
 curl -sSL https://raw.githubusercontent.com/oneuid/uid-agent/main/install.sh | bash
 ```
 
-### Windows
-
-Run the following command in PowerShell:
-```powershell
+### Windows CLI installation:
+```bash
 Invoke-Expression (Invoke-WebRequest -Headers @{"Cache-Control"="no-cache"} -Uri "https://raw.githubusercontent.com/oneuid/uid-agent/main/install.ps1?t=$(Get-Date -UFormat %s)" -UseBasicParsing).Content
 ```
 
----
-
-## Platform Support
-
-| Platform | Disk Encryption | Firewall | Kernel/OS | Notes |
-|----------|----------------|----------|-----------|-------|
-| Linux    | LUKS / dm-crypt | ufw / iptables | `/proc` + `/sys` | eBPF features on Kernel 5.8+ |
-| macOS    | FileVault 2     | Application Firewall (socketfilterfw) | `sw_vers` / `sysctl` | Requires macOS 12+ |
-| Windows  | BitLocker       | Windows Defender Firewall | PowerShell / WMI | Requires Windows 10+ |
-
-## Prerequisites (Build from Source)
-
-- [Rust](https://rustup.rs/) (1.75+)
-- **Linux only:** `libbpf` and `clang` (for eBPF probes, Kernel 5.8+)
-- **macOS:** No extra deps. Xcode CLT recommended.
-- **Windows:** PowerShell 5.1+ (pre-installed on Windows 10/11)
-
-## Manual Build and Run
-
-1. **Clone the repository**
-   ```bash
-   git clone git@github.com:oneuid/uid-agent.git
-   cd uid-agent
-   ```
-
-2. **Build the agent**
-   ```bash
-   # Native platform
-   cargo build --release
-
-   # Cross-compile for Windows (from Linux/macOS):
-   # rustup target add x86_64-pc-windows-gnu
-   # cargo build --release --target x86_64-pc-windows-gnu
-   ```
-
-3. **Run**
-   ```bash
-   # Linux/macOS
-   ./target/release/uid-agent posture
-
-   # Windows
-   .\target\release\uid-agent.exe posture
-   ```
-
-## Commands
-
+### CLI Command Reference:
 ```
-uid-agent register    — Generate hardware-bound Ed25519 keypair
-uid-agent posture     — Collect device compliance posture (SOC 2 evidence)
-uid-agent sign <data> — Cryptographically sign a payload
-uid-agent daemon      — Run background SSH agent socket
-uid-agent approve <token> — Approve an authentication challenge
+uid-agent register          — Generate hardware-bound Ed25519 keypair
+uid-agent posture           — Collect device compliance posture (SOC 2 evidence)
+uid-agent sign <data>       — Cryptographically sign a payload
+uid-agent daemon            — Run background SSH agent socket and HTTP server
+uid-agent approve <token>   — Connect, listen, and approve authentication challenge
 ```
-
-## Development
-
-- eBPF probes (Linux only) go in `src/bpf/`
-- Platform implementations: `src/posture.rs` uses `#[cfg(target_os)]` compile-time dispatch
 
 ## License
 
-[Apache License 2.0](LICENSE) — Open source for complete transparency in how endpoint attestation is handled.
+[Apache License 2.0](LICENSE) — Open source for complete transparency in how endpoint attestation and secure sandboxes are handled.
