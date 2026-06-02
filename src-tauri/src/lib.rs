@@ -1,6 +1,17 @@
 use std::sync::Arc;
 use std::process::Command;
 use serde_json::json;
+
+fn new_command<S: AsRef<std::ffi::OsStr>>(program: S) -> Command {
+    #[allow(unused_mut)]
+    let mut cmd = Command::new(program);
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
+    }
+    cmd
+}
 use tauri::{Manager, WindowEvent};
 use tauri::menu::{Menu, MenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
@@ -63,7 +74,7 @@ fn logout_user() -> Result<(), String> {
 
 #[tauri::command]
 fn open_browser_url(url: String) -> Result<(), String> {
-    let _ = Command::new("xdg-open").arg(url).status();
+    let _ = new_command("xdg-open").arg(url).status();
     Ok(())
 }
 
@@ -75,12 +86,12 @@ async fn remediate_firewall() -> Result<(), String> {
         let is_firewalld = std::path::Path::new("/usr/sbin/firewalld").exists();
         
         if is_ufw {
-            let status = Command::new("pkexec")
+            let status = new_command("pkexec")
                 .args(["ufw", "enable"])
                 .status()
                 .map_err(|e| format!("Failed to execute pkexec ufw: {}", e))?;
             
-            let _ = Command::new("pkexec")
+            let _ = new_command("pkexec")
                 .args(["systemctl", "enable", "ufw"])
                 .status();
                 
@@ -88,7 +99,7 @@ async fn remediate_firewall() -> Result<(), String> {
                 return Ok(());
             }
         } else if is_firewalld {
-            let status = Command::new("pkexec")
+            let status = new_command("pkexec")
                 .args(["systemctl", "enable", "--now", "firewalld"])
                 .status()
                 .map_err(|e| format!("Failed to execute pkexec firewalld: {}", e))?;
@@ -103,7 +114,7 @@ async fn remediate_firewall() -> Result<(), String> {
 
     #[cfg(target_os = "macos")]
     {
-        let status = Command::new("sudo")
+        let status = new_command("sudo")
             .args(["/usr/libexec/ApplicationFirewall/socketfilterfw", "--setglobalstate", "on"])
             .status()
             .map_err(|e| format!("Failed to run socketfilterfw: {}", e))?;
@@ -116,7 +127,7 @@ async fn remediate_firewall() -> Result<(), String> {
 
     #[cfg(target_os = "windows")]
     {
-        let status = Command::new("powershell")
+        let status = new_command("powershell")
             .args(["-NoProfile", "-Command", "Start-Process powershell -ArgumentList 'Set-NetFirewallProfile -All -Enabled True' -Verb RunAs -Wait"])
             .status()
             .map_err(|e| format!("Failed to run PowerShell: {}", e))?;
@@ -137,18 +148,18 @@ async fn remediate_screen_lock() -> Result<(), String> {
     {
         let mut success = false;
         
-        if let Ok(status) = Command::new("gsettings")
+        if let Ok(status) = new_command("gsettings")
             .args(["set", "org.gnome.desktop.screensaver", "lock-enabled", "true"])
             .status() {
             if status.success() {
                 success = true;
             }
         }
-        let _ = Command::new("gsettings")
+        let _ = new_command("gsettings")
             .args(["set", "org.gnome.desktop.session", "idle-delay", "300"])
             .status();
             
-        if let Ok(status) = Command::new("kwriteconfig5")
+        if let Ok(status) = new_command("kwriteconfig5")
             .args(["--group", "ScreenSaver", "--key", "Lock", "true"])
             .status() {
             if status.success() {
@@ -165,11 +176,11 @@ async fn remediate_screen_lock() -> Result<(), String> {
 
     #[cfg(target_os = "macos")]
     {
-        let status = Command::new("defaults")
+        let status = new_command("defaults")
             .args(["write", "com.apple.screensaver", "askForPassword", "-int", "1"])
             .status()
             .map_err(|e| format!("Failed to run defaults: {}", e))?;
-        let _ = Command::new("defaults")
+        let _ = new_command("defaults")
             .args(["write", "com.apple.screensaver", "askForPasswordDelay", "-int", "0"])
             .status();
         if status.success() {
@@ -181,7 +192,7 @@ async fn remediate_screen_lock() -> Result<(), String> {
 
     #[cfg(target_os = "windows")]
     {
-        let status = Command::new("powershell")
+        let status = new_command("powershell")
             .args(["-NoProfile", "-Command", "reg add 'HKEY_CURRENT_USER\\Control Panel\\Desktop' /v ScreenSaveActive /t REG_SZ /d 1 /f; reg add 'HKEY_CURRENT_USER\\Control Panel\\Desktop' /v ScreenSaverIsSecure /t REG_SZ /d 1 /f; reg add 'HKEY_CURRENT_USER\\Control Panel\\Desktop' /v ScreenSaveTimeOut /t REG_SZ /d 300 /f"])
             .status()
             .map_err(|e| format!("Failed to configure Windows registry for screen lock: {}", e))?;
@@ -241,7 +252,7 @@ fn pin_to_dock(app_id: String) -> Result<String, String> {
     }
     let desktop_filename = "uid-agent-desktop.desktop".to_string();
 
-    let output = Command::new("gsettings")
+    let output = new_command("gsettings")
         .args(&["get", "org.gnome.shell", "favorite-apps"])
         .output()
         .map_err(|e| format!("Failed to get GNOME settings: {}", e))?;
@@ -258,7 +269,7 @@ fn pin_to_dock(app_id: String) -> Result<String, String> {
         format!("{trimmed}, '{desktop_filename}']")
     };
 
-    let status = Command::new("gsettings")
+    let status = new_command("gsettings")
         .args(&["set", "org.gnome.shell", "favorite-apps", &new_favorites])
         .status()
         .map_err(|e| format!("Failed to set GNOME settings: {}", e))?;
@@ -273,13 +284,13 @@ fn pin_to_dock(app_id: String) -> Result<String, String> {
 
 #[tauri::command]
 async fn check_for_updates() -> Result<String, String> {
-    let current_version = "3.0.2"; // matches tauri.conf.json
+    let current_version = "3.0.3"; // matches tauri.conf.json
 
     // Fetch latest version string from raw.githubusercontent.com
     let latest_version = {
         #[cfg(target_os = "windows")]
         {
-            let output = Command::new("powershell")
+            let output = new_command("powershell")
                 .args([
                     "-NoProfile",
                     "-Command",
@@ -294,7 +305,7 @@ async fn check_for_updates() -> Result<String, String> {
         }
         #[cfg(not(target_os = "windows"))]
         {
-            let output = Command::new("sh")
+            let output = new_command("sh")
                 .args([
                     "-c",
                     "curl -s https://raw.githubusercontent.com/oneuid/uid-agent/main/src-tauri/tauri.conf.json | grep '\"version\"' | cut -d '\"' -f 4"
@@ -323,7 +334,7 @@ async fn check_for_updates() -> Result<String, String> {
             "https://github.com/oneuid/uid-agent/releases/download/v{}/uid-agent-desktop_{}_x64_en-US.msi",
             latest_version, latest_version
         );
-        let status = Command::new("powershell")
+        let status = new_command("powershell")
             .args([
                 "-NoProfile",
                 "-Command",
@@ -342,7 +353,7 @@ async fn check_for_updates() -> Result<String, String> {
     #[cfg(target_os = "linux")]
     {
         // Run install.sh script from main branch
-        let status = Command::new("sh")
+        let status = new_command("sh")
             .args([
                 "-c",
                 "curl -fsSL https://raw.githubusercontent.com/oneuid/uid-agent/main/install.sh | bash"

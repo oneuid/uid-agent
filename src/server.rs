@@ -6,6 +6,17 @@ use serde_json::json;
 use std::process::Command;
 use std::fs;
 
+fn new_command<S: AsRef<std::ffi::OsStr>>(program: S) -> Command {
+    #[allow(unused_mut)]
+    let mut cmd = Command::new(program);
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
+    }
+    cmd
+}
+
 static DRIVER_CACHE: OnceLock<Mutex<Option<(String, String, bool)>>> = OnceLock::new();
 static USB_SIG_CACHE: OnceLock<Mutex<String>> = OnceLock::new();
 static CERTS_CACHE: OnceLock<Mutex<Vec<serde_json::Value>>> = OnceLock::new();
@@ -124,9 +135,9 @@ fn clean_dn(dn: &str) -> String {
 
 fn parse_cert_info(der_bytes: &[u8]) -> Option<(String, String, String, String, String)> {
     use std::io::Write;
-    use std::process::{Command, Stdio};
+    use std::process::Stdio;
 
-    let mut child = Command::new("openssl")
+    let mut child = new_command("openssl")
         .args([
             "x509",
             "-inform", "der",
@@ -220,7 +231,7 @@ fn write_persistent_certs(sig: &str, certs: &[serde_json::Value]) {
 fn get_usb_devices_signature() -> String {
     #[cfg(target_os = "windows")]
     {
-        let output = Command::new("powershell")
+        let output = new_command("powershell")
             .args([
                 "-NoProfile",
                 "-Command",
@@ -241,7 +252,7 @@ fn get_usb_devices_signature() -> String {
     }
     #[cfg(not(target_os = "windows"))]
     {
-        let output = Command::new("lsusb").output();
+        let output = new_command("lsusb").output();
         if let Ok(out) = output {
             let stdout = String::from_utf8_lossy(&out.stdout);
             let mut devices = Vec::new();
@@ -264,7 +275,7 @@ fn get_usb_devices_signature() -> String {
 fn is_smartcard_reader_present(sig_string: &str) -> bool {
     #[cfg(target_os = "windows")]
     {
-        let output = Command::new("powershell")
+        let output = new_command("powershell")
             .args([
                 "-NoProfile",
                 "-Command",
@@ -282,14 +293,14 @@ fn is_smartcard_reader_present(sig_string: &str) -> bool {
     #[cfg(not(target_os = "windows"))]
     {
         let stdout = if sig_string.is_empty() {
-            let output = Command::new("lsusb").output();
+            let output = new_command("lsusb").output();
             if let Ok(out) = output {
                 String::from_utf8_lossy(&out.stdout).to_string()
             } else {
                 return true;
             }
         } else {
-            let output = Command::new("lsusb").output();
+            let output = new_command("lsusb").output();
             if let Ok(out) = output {
                 String::from_utf8_lossy(&out.stdout).to_string()
             } else {
@@ -345,7 +356,7 @@ fn get_pkcs11_tool_path(_driver: Option<&str>) -> String {
 }
 
 fn check_driver_valid(driver: &str) -> Option<(String, bool)> {
-    let output = Command::new(get_pkcs11_tool_path(Some(driver)))
+    let output = new_command(get_pkcs11_tool_path(Some(driver)))
         .args(["--module", driver, "--list-slots"])
         .output();
 
@@ -624,7 +635,7 @@ pub fn get_usb_certificates() -> Vec<serde_json::Value> {
     
     if let Some((driver, label, _login_required)) = detect_active_driver_and_label() {
         // Try listing certificates
-        let output = Command::new(get_pkcs11_tool_path(Some(&driver)))
+        let output = new_command(get_pkcs11_tool_path(Some(&driver)))
             .args(["--module", &driver, "--list-objects", "--type", "cert"])
             .output();
             
@@ -648,7 +659,7 @@ pub fn get_usb_certificates() -> Vec<serde_json::Value> {
                     let home = get_home_dir();
                     let temp_cert_path = format!("{}/.uid/temp_cert_{}.der", home, id);
                     
-                    let read_output = Command::new(get_pkcs11_tool_path(Some(&driver)))
+                    let read_output = new_command(get_pkcs11_tool_path(Some(&driver)))
                         .args([
                             "--module", &driver,
                             "--read-object",
@@ -1205,7 +1216,7 @@ async fn handle_connection(mut stream: TcpStream, keys: Arc<AgentKeys>) -> Resul
                     if is_probe {
                         // Probe: just read certificate after logging in (no signing required)
                         let temp_cert_path = format!("{}/temp_cert_{}.der", dot_uid, raw_id);
-                        let read_output = Command::new(get_pkcs11_tool_path(Some(&driver)))
+                        let read_output = new_command(get_pkcs11_tool_path(Some(&driver)))
                             .args([
                                 "--module", &driver,
                                 "--login",
@@ -1231,7 +1242,7 @@ async fn handle_connection(mut stream: TcpStream, keys: Arc<AgentKeys>) -> Resul
 
                         if !read_ok && cert_id == "usb_auto_detected" {
                             // Fallback: list objects to find real ID
-                            let list_output = Command::new(get_pkcs11_tool_path(Some(&driver)))
+                            let list_output = new_command(get_pkcs11_tool_path(Some(&driver)))
                                 .args([
                                     "--module", &driver,
                                     "--login",
@@ -1256,7 +1267,7 @@ async fn handle_connection(mut stream: TcpStream, keys: Arc<AgentKeys>) -> Resul
                             if let Some(rid) = resolved_id {
                                 raw_id = rid;
                                 let temp_cert_path2 = format!("{}/temp_cert_{}.der", dot_uid, raw_id);
-                                let read_output2 = Command::new(get_pkcs11_tool_path(Some(&driver)))
+                                let read_output2 = new_command(get_pkcs11_tool_path(Some(&driver)))
                                     .args([
                                         "--module", &driver,
                                         "--login",
@@ -1299,7 +1310,7 @@ async fn handle_connection(mut stream: TcpStream, keys: Arc<AgentKeys>) -> Resul
                             
                             let _ = fs::write(&temp_hash_path, &hash_bytes);
                             
-                            let sign_output = Command::new(get_pkcs11_tool_path(Some(&driver)))
+                            let sign_output = new_command(get_pkcs11_tool_path(Some(&driver)))
                                 .args([
                                     "--module", &driver,
                                     "--login",
@@ -1327,7 +1338,7 @@ async fn handle_connection(mut stream: TcpStream, keys: Arc<AgentKeys>) -> Resul
                                     // Only read cert data if requested as auto-detect (browser needs it to update state)
                                     if cert_id == "usb_auto_detected" {
                                         let temp_cert_path = format!("{}/temp_cert_{}.der", dot_uid, raw_id);
-                                        let read_output = Command::new(get_pkcs11_tool_path(Some(&driver)))
+                                        let read_output = new_command(get_pkcs11_tool_path(Some(&driver)))
                                             .args([
                                                 "--module", &driver,
                                                 "--read-object",
@@ -1573,7 +1584,7 @@ async fn handle_connection(mut stream: TcpStream, keys: Arc<AgentKeys>) -> Resul
 fn prompt_gui_pin(label: &str) -> Option<String> {
     #[cfg(target_os = "linux")]
     {
-        let output = Command::new("zenity")
+        let output = new_command("zenity")
             .args([
                 "--entry",
                 "--hide-text",
@@ -1597,7 +1608,7 @@ fn prompt_gui_pin(label: &str) -> Option<String> {
             "display dialog \"Please enter the PIN for token: {}\" default answer \"\" with hidden answer buttons {{\"Cancel\", \"OK\"}} default button \"OK\" with title \"UID.one\"",
             label
         );
-        let output = Command::new("osascript")
+        let output = new_command("osascript")
             .args(["-e", &script])
             .output();
         if let Ok(out) = output {
@@ -1616,7 +1627,7 @@ fn prompt_gui_pin(label: &str) -> Option<String> {
 fn prompt_gui_approval(message: &str) -> bool {
     #[cfg(target_os = "linux")]
     {
-        let output = Command::new("zenity")
+        let output = new_command("zenity")
             .args([
                 "--question",
                 "--title=UID.one Enclave Approval",
@@ -1633,7 +1644,7 @@ fn prompt_gui_approval(message: &str) -> bool {
             "display dialog \"{}\" buttons {{\"Deny\", \"Approve\"}} default button \"Approve\" with title \"UID.one\"",
             message
         );
-        let output = Command::new("osascript")
+        let output = new_command("osascript")
             .args(["-e", &script])
             .output();
         if let Ok(out) = output {

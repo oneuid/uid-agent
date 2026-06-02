@@ -260,10 +260,21 @@ impl SimpleHttpRequest {
     }
 }
 
+fn new_command<S: AsRef<std::ffi::OsStr>>(program: S) -> std::process::Command {
+    #[allow(unused_mut)]
+    let mut cmd = std::process::Command::new(program);
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
+    }
+    cmd
+}
+
 fn prompt_gui_approval(message: &str) -> bool {
     #[cfg(target_os = "linux")]
     {
-        let output = std::process::Command::new("zenity")
+        let output = new_command("zenity")
             .args([
                 "--question",
                 "--title=UID.one Enclave Approval",
@@ -280,7 +291,7 @@ fn prompt_gui_approval(message: &str) -> bool {
             "display dialog \"{}\" buttons {{\"Deny\", \"Approve\"}} default button \"Approve\" with title \"UID.one\"",
             message
         );
-        let output = std::process::Command::new("osascript")
+        let output = new_command("osascript")
             .args(["-e", &script])
             .output();
         if let Ok(out) = output {

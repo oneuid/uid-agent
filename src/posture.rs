@@ -17,8 +17,19 @@ pub struct DevicePosture {
     pub vpn_active: bool,
 }
 
+fn new_command<S: AsRef<std::ffi::OsStr>>(program: S) -> Command {
+    #[allow(unused_mut)]
+    let mut cmd = Command::new(program);
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
+    }
+    cmd
+}
+
 fn get_hostname() -> String {
-    Command::new("hostname")
+    new_command("hostname")
         .output()
         .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
         .unwrap_or_else(|_| "localhost".to_string())
@@ -139,25 +150,25 @@ mod linux {
 
     fn check_firewall_status() -> bool {
         // 1. systemctl check for ufw (works without root)
-        if let Ok(out) = Command::new("systemctl").args(["is-active", "ufw"]).output() {
+        if let Ok(out) = new_command("systemctl").args(["is-active", "ufw"]).output() {
             if String::from_utf8_lossy(&out.stdout).trim() == "active" {
                 return true;
             }
         }
         // 2. systemctl check for firewalld (works without root)
-        if let Ok(out) = Command::new("systemctl").args(["is-active", "firewalld"]).output() {
+        if let Ok(out) = new_command("systemctl").args(["is-active", "firewalld"]).output() {
             if String::from_utf8_lossy(&out.stdout).trim() == "active" {
                 return true;
             }
         }
         // 3. ufw command fallback (requires root)
-        if let Ok(out) = Command::new("ufw").arg("status").output() {
+        if let Ok(out) = new_command("ufw").arg("status").output() {
             if String::from_utf8_lossy(&out.stdout).contains("Status: active") {
                 return true;
             }
         }
         // 4. iptables fallback (requires root)
-        if let Ok(out) = Command::new("iptables").args(["-L", "-n"]).output() {
+        if let Ok(out) = new_command("iptables").args(["-L", "-n"]).output() {
             if String::from_utf8_lossy(&out.stdout).contains("Chain INPUT") {
                 return true;
             }
@@ -173,7 +184,7 @@ mod linux {
             }
         }
         // Fallback: check mokutil
-        if let Ok(out) = Command::new("mokutil").arg("--sb-state").output() {
+        if let Ok(out) = new_command("mokutil").arg("--sb-state").output() {
             let stdout = String::from_utf8_lossy(&out.stdout);
             if stdout.contains("SecureBoot enabled") {
                 return true;
@@ -184,7 +195,7 @@ mod linux {
 
     fn check_screen_lock() -> bool {
         // GNOME desktop setting
-        if let Ok(out) = Command::new("gsettings")
+        if let Ok(out) = new_command("gsettings")
             .args(["get", "org.gnome.desktop.screensaver", "lock-enabled"])
             .output() {
             let s = String::from_utf8_lossy(&out.stdout).trim().to_lowercase();
@@ -193,7 +204,7 @@ mod linux {
             }
         }
         // KDE desktop setting fallback
-        if let Ok(out) = Command::new("kreadconfig5")
+        if let Ok(out) = new_command("kreadconfig5")
             .args(["--group", "ScreenSaver", "--key", "Lock"])
             .output() {
             let s = String::from_utf8_lossy(&out.stdout).trim().to_lowercase();
@@ -222,7 +233,7 @@ mod linux {
                         }
                         if let Ok(content) = fs::read_to_string(&path) {
                             if content.contains("BEGIN") && content.contains("PRIVATE KEY") {
-                                if let Ok(out) = Command::new("ssh-keygen")
+                                if let Ok(out) = new_command("ssh-keygen")
                                     .args(["-y", "-P", "", "-f", path.to_str().unwrap_or("")])
                                     .output() {
                                     if out.status.success() {
@@ -239,7 +250,7 @@ mod linux {
     }
 
     fn check_vpn_status() -> bool {
-        if let Ok(out) = Command::new("nmcli").args(["connection", "show", "--active"]).output() {
+        if let Ok(out) = new_command("nmcli").args(["connection", "show", "--active"]).output() {
             let s = String::from_utf8_lossy(&out.stdout).to_lowercase();
             if s.contains("vpn") || s.contains("wireguard") || s.contains("tun") {
                 return true;
@@ -292,7 +303,7 @@ mod macos {
     }
 
     fn get_os_version() -> String {
-        Command::new("sw_vers")
+        new_command("sw_vers")
             .arg("-productVersion")
             .output()
             .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
@@ -300,7 +311,7 @@ mod macos {
     }
 
     fn get_kernel_version() -> String {
-        Command::new("uname")
+        new_command("uname")
             .arg("-r")
             .output()
             .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
@@ -308,7 +319,7 @@ mod macos {
     }
 
     fn get_uptime() -> u64 {
-        if let Ok(out) = Command::new("sysctl").arg("kern.boottime").output() {
+        if let Ok(out) = new_command("sysctl").arg("kern.boottime").output() {
             let s = String::from_utf8_lossy(&out.stdout);
             if let Some(pos) = s.find("sec = ") {
                 let after = &s[pos + 6..];
@@ -326,7 +337,7 @@ mod macos {
     }
 
     fn check_filevault() -> bool {
-        Command::new("fdesetup")
+        new_command("fdesetup")
             .arg("status")
             .output()
             .map(|o| String::from_utf8_lossy(&o.stdout).contains("FileVault is On"))
@@ -334,7 +345,7 @@ mod macos {
     }
 
     fn check_firewall() -> bool {
-        Command::new("/usr/libexec/ApplicationFirewall/socketfilterfw")
+        new_command("/usr/libexec/ApplicationFirewall/socketfilterfw")
             .arg("--getglobalstate")
             .output()
             .map(|o| String::from_utf8_lossy(&o.stdout).to_lowercase().contains("enabled"))
@@ -342,7 +353,7 @@ mod macos {
     }
 
     fn check_secure_boot() -> bool {
-        if let Ok(out) = Command::new("csrutil").arg("status").output() {
+        if let Ok(out) = new_command("csrutil").arg("status").output() {
             let stdout = String::from_utf8_lossy(&out.stdout);
             if stdout.contains("enabled") {
                 return true;
@@ -414,7 +425,7 @@ mod windows {
     }
 
     fn get_uptime() -> u64 {
-        Command::new("powershell")
+        new_command("powershell")
             .args(["-NoProfile", "-Command",
                 "((Get-Date) - (gcim Win32_OperatingSystem).LastBootUpTime).TotalSeconds"])
             .output()
@@ -428,7 +439,7 @@ mod windows {
     }
 
     fn check_bitlocker() -> bool {
-        Command::new("powershell")
+        new_command("powershell")
             .args(["-NoProfile", "-Command",
                 "(Get-BitLockerVolume -MountPoint C:).ProtectionStatus"])
             .output()
@@ -440,7 +451,7 @@ mod windows {
     }
 
     fn check_firewall() -> bool {
-        Command::new("powershell")
+        new_command("powershell")
             .args(["-NoProfile", "-Command",
                 "(Get-NetFirewallProfile -Profile Domain,Public,Private | Where-Object { $_.Enabled -eq $true }).Count -gt 0"])
             .output()
