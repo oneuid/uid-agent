@@ -104,6 +104,10 @@ async fn install_app(app_id: String) -> Result<String, String> {
         return Err("Docker is not installed on this system. Please install Docker first.".to_string());
     }
 
+    // Authorize local docker X11 access
+    let _ = Command::new("xhost").arg("+local:docker").status();
+    let _ = Command::new("xhost").arg("+local:root").status();
+
     // Pull the Wine Docker image
     let pull_status = Command::new("docker")
         .args(&["pull", "scottyhardy/docker-wine:latest"])
@@ -193,7 +197,7 @@ async fn install_app(app_id: String) -> Result<String, String> {
     let desktop_content = "[Desktop Entry]\n\
                            Name=Zalo (UID Sandbox)\n\
                            Comment=Run Zalo safely inside a Docker container\n\
-                           Exec=docker start uid-zalo && docker exec -d uid-zalo bash -c \"[ -f /home/wineuser/.wine/drive_c/users/wineuser/AppData/Local/Programs/Zalo/Zalo.exe ] && wine /home/wineuser/.wine/drive_c/users/wineuser/AppData/Local/Programs/Zalo/Zalo.exe || (curl -L -o /home/wineuser/downloads/ZaloSetup.exe https://chat.zalo.me/download/html5/ZaloSetup.exe && wine /home/wineuser/downloads/ZaloSetup.exe)\"\n\
+                           Exec=xhost +local:docker && docker start uid-zalo && docker exec -d uid-zalo bash -c \"[ -f /home/wineuser/.wine/drive_c/users/wineuser/AppData/Local/Programs/Zalo/Zalo.exe ] && wine /home/wineuser/.wine/drive_c/users/wineuser/AppData/Local/Programs/Zalo/Zalo.exe || (curl -L -o /home/wineuser/downloads/ZaloSetup.exe https://chat.zalo.me/download/html5/ZaloSetup.exe && wine /home/wineuser/downloads/ZaloSetup.exe)\"\n\
                            Icon=zalo-sandbox\n\
                            Terminal=false\n\
                            Type=Application\n\
@@ -233,6 +237,10 @@ async fn launch_app(app_id: String) -> Result<(), String> {
     if app_id != "zalo" {
         return Err("Unsupported application".to_string());
     }
+
+    // Authorize local docker X11 access
+    let _ = Command::new("xhost").arg("+local:docker").status();
+    let _ = Command::new("xhost").arg("+local:root").status();
 
     // Start container
     let _ = Command::new("docker")
