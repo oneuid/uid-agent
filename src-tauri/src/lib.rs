@@ -193,11 +193,11 @@ async fn install_app(app_id: String) -> Result<String, String> {
     let desktop_dir = format!("{}/.local/share/applications", home);
     let _ = std::fs::create_dir_all(&desktop_dir);
     
-    // The Exec command checks if zalo is installed, if not, runs ZaloSetup.exe first
+    // The Exec command checks if zalo is installed, if not, downloads and runs ZaloSetup.exe first
     let desktop_content = "[Desktop Entry]\n\
                            Name=Zalo (UID Sandbox)\n\
                            Comment=Run Zalo safely inside a Docker container\n\
-                           Exec=xhost +local:docker && docker start uid-zalo && docker exec -d uid-zalo bash -c \"[ -f /home/wineuser/.wine/drive_c/users/wineuser/AppData/Local/Programs/Zalo/Zalo.exe ] && wine /home/wineuser/.wine/drive_c/users/wineuser/AppData/Local/Programs/Zalo/Zalo.exe || (curl -L -o /home/wineuser/downloads/ZaloSetup.exe https://chat.zalo.me/download/html5/ZaloSetup.exe && wine /home/wineuser/downloads/ZaloSetup.exe)\"\n\
+                           Exec=xhost +local:docker && docker start uid-zalo && docker exec -d uid-zalo bash -c \"[ -f /home/wineuser/.wine/drive_c/users/wineuser/AppData/Local/Programs/Zalo/Zalo.exe ] && wine /home/wineuser/.wine/drive_c/users/wineuser/AppData/Local/Programs/Zalo/Zalo.exe || (wget -U 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36' -O /home/wineuser/downloads/ZaloSetup.exe 'https://zalo.me/download/zalo-pc?utm=90000' && wine /home/wineuser/downloads/ZaloSetup.exe)\"\n\
                            Icon=zalo-sandbox\n\
                            Terminal=false\n\
                            Type=Application\n\
@@ -208,13 +208,15 @@ async fn install_app(app_id: String) -> Result<String, String> {
 
     // Download and install inside container in background task
     tauri::async_runtime::spawn(async move {
-        // Run curl inside container to download ZaloSetup.exe
+        // Run wget inside container to download ZaloSetup.exe (resolving redirect using Windows User-Agent)
         let _ = Command::new("docker")
             .args(&[
                 "exec",
                 "uid-zalo",
-                "curl", "-L", "-o", "/home/wineuser/downloads/ZaloSetup.exe",
-                "https://chat.zalo.me/download/html5/ZaloSetup.exe"
+                "wget",
+                "-U", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                "-O", "/home/wineuser/downloads/ZaloSetup.exe",
+                "https://zalo.me/download/zalo-pc?utm=90000"
             ])
             .status();
 
@@ -271,8 +273,10 @@ async fn launch_app(app_id: String) -> Result<(), String> {
             .args(&[
                 "exec",
                 "uid-zalo",
-                "curl", "-L", "-o", "/home/wineuser/downloads/ZaloSetup.exe",
-                "https://chat.zalo.me/download/html5/ZaloSetup.exe"
+                "wget",
+                "-U", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                "-O", "/home/wineuser/downloads/ZaloSetup.exe",
+                "https://zalo.me/download/zalo-pc?utm=90000"
             ])
             .status();
 
