@@ -90,7 +90,8 @@ $RegistryValueData = "`"$DestExe`" daemon"
 Set-ItemProperty -Path $RegistryPath -Name $RegistryValueName -Value $RegistryValueData
 Write-Host "[uid-agent] Registered to run on startup in Current User Registry."
 
-# Run the agent in background immediately
-Start-Process -FilePath $DestExe -ArgumentList "daemon" -WindowStyle Hidden
+# Run the agent in background immediately (fully detached using WScript.Shell to prevent closure with terminal)
+$WshShell = New-Object -ComObject WScript.Shell
+$WshShell.Run("`"$DestExe`" daemon", 0, $false)
 Write-Host "[uid-agent] Started uid-agent background daemon."
 Write-Host "[uid-agent] Installation completed successfully."
