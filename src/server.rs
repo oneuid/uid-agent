@@ -251,11 +251,14 @@ fn get_usb_devices_signature() -> String {
 fn is_smartcard_reader_present(sig_string: &str) -> bool {
     #[cfg(target_os = "windows")]
     {
+        // Many Vietnamese USB tokens (Viettel-CA, VNPT, FPT, etc.) use custom/proprietary non-CCID controllers 
+        // that register under vendor-specific GUIDs rather than the standard smart card ClassGuid.
+        // Thus, we check for both standard smartcard ClassGuid and any USB devices matching CA/Token keywords.
         let output = new_command("powershell")
             .args([
                 "-NoProfile",
                 "-Command",
-                "[System.Management.ManagementObjectSearcher]::new('SELECT Name FROM Win32_PnPEntity WHERE ClassGuid = ''{50dd5230-ba8a-11d1-bf5d-0000f805f530}''').Get().Count"
+                "[System.Management.ManagementObjectSearcher]::new('SELECT Name FROM Win32_PnPEntity WHERE ClassGuid = ''{50dd5230-ba8a-11d1-bf5d-0000f805f530}'' OR Name LIKE ''%token%'' OR Name LIKE ''%smart%card%'' OR Name LIKE ''%feitian%'' OR Name LIKE ''%epass%'' OR Name LIKE ''%viettel%'' OR Name LIKE ''%vnpt%'' OR Name LIKE ''%fpt%'' OR Name LIKE ''%bkav%'' OR Name LIKE ''%vina%'' OR Name LIKE ''%misa%''').Get().Count"
             ])
             .output();
         if let Ok(out) = output {

@@ -46,11 +46,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             println!("[uid-agent] Starting system endpoint security agent daemon...");
             let keys = Arc::new(AgentKeys::load_or_create()?);
             
-            // Set default socket path in user's home folder ~/.uid/agent.sock
-            let home = env::var("HOME")
-                .or_else(|_| env::var("USERPROFILE"))
-                .unwrap_or_else(|_| "/home/s".to_string());
-            let socket_path = format!("{}/.uid/agent.sock", home);
+            // Set default socket path in user's standard data directory
+            let base_dir = uid_agent::get_uid_data_dir();
+            let socket_path = format!("{}/agent.sock", base_dir);
             
             let agent = SshAgent::new(keys.clone(), socket_path.clone());
             
