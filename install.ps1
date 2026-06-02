@@ -40,6 +40,44 @@ if (-not (Test-Path $SourceExe -ErrorAction SilentlyContinue)) {
     }
 }
 
+# Check if pkcs11-tool is present or OpenSC is installed
+$HasPkcs11 = $false
+if (Get-Command "pkcs11-tool" -ErrorAction SilentlyContinue) {
+    $HasPkcs11 = $true
+} elseif (Test-Path "C:\Program Files\OpenSC Project\OpenSC\bin\pkcs11-tool.exe" -ErrorAction SilentlyContinue) {
+    $HasPkcs11 = $true
+} elseif (Test-Path "C:\Program Files (x86)\OpenSC Project\OpenSC\bin\pkcs11-tool.exe" -ErrorAction SilentlyContinue) {
+    $HasPkcs11 = $true
+}
+
+if (-not $HasPkcs11) {
+    Write-Host "[uid-agent] OpenSC / pkcs11-tool is required for USB Token signing but not found."
+    Write-Host "[uid-agent] Downloading and installing OpenSC silently..."
+    
+    $IsAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+    if (-not $IsAdmin) {
+        Write-Warning "[uid-agent] Administrative privileges are required to install OpenSC automatically."
+        Write-Warning "To enable USB Token support, please re-run this installation command in an Administrator PowerShell window."
+    } else {
+        $MsiPath = Join-Path $env:TEMP "OpenSC-0.25.1_win64.msi"
+        $MsiUri = "https://github.com/OpenSC/OpenSC/releases/download/0.25.1/OpenSC-0.25.1_win64.msi"
+        try {
+            Invoke-WebRequest -Uri $MsiUri -OutFile $MsiPath -UseBasicParsing
+            Write-Host "[uid-agent] Running silent MSI installer..."
+            $InstallProcess = Start-Process msiexec.exe -ArgumentList "/i `"$MsiPath`" /qn /norestart" -Wait -PassThru
+            if ($InstallProcess.ExitCode -eq 0) {
+                Write-Host "[uid-agent] OpenSC installed successfully."
+            } else {
+                Write-Warning "[uid-agent] OpenSC silent installation completed with exit code $($InstallProcess.ExitCode)."
+                Write-Warning "You may need to download and install OpenSC manually from: https://github.com/OpenSC/OpenSC/releases"
+            }
+        } catch {
+            Write-Warning "[uid-agent] Failed to install OpenSC automatically: $_"
+            Write-Warning "Please download and install OpenSC manually from: https://github.com/OpenSC/OpenSC/releases"
+        }
+    }
+}
+
 # Copy binary to LocalAppData
 $DestExe = Join-Path $InstallDir "uid-agent.exe"
 Copy-Item -Path $SourceExe -Destination $DestExe -Force

@@ -163,8 +163,24 @@ fn is_smartcard_reader_present(sig_string: &str) -> bool {
     false
 }
 
+fn get_pkcs11_tool_path() -> String {
+    #[cfg(target_os = "windows")]
+    {
+        let paths = [
+            "C:\\Program Files\\OpenSC Project\\OpenSC\\bin\\pkcs11-tool.exe",
+            "C:\\Program Files (x86)\\OpenSC Project\\OpenSC\\bin\\pkcs11-tool.exe",
+        ];
+        for p in &paths {
+            if std::path::Path::new(p).exists() {
+                return p.to_string();
+            }
+        }
+    }
+    "pkcs11-tool".to_string()
+}
+
 fn check_driver_valid(driver: &str) -> Option<(String, bool)> {
-    let output = Command::new("pkcs11-tool")
+    let output = Command::new(get_pkcs11_tool_path())
         .args(["--module", driver, "--list-slots"])
         .output();
 
@@ -387,7 +403,7 @@ fn get_usb_certificates() -> Vec<serde_json::Value> {
             }));
         } else {
             // Try listing certificates
-            let output = Command::new("pkcs11-tool")
+            let output = Command::new(get_pkcs11_tool_path())
                 .args(["--module", &driver, "--list-objects", "--type", "cert"])
                 .output();
                 
@@ -411,7 +427,7 @@ fn get_usb_certificates() -> Vec<serde_json::Value> {
                         let home = std::env::var("HOME").unwrap_or_else(|_| "/home/s".to_string());
                         let temp_cert_path = format!("{}/.uid/temp_cert_{}.der", home, id);
                         
-                        let read_output = Command::new("pkcs11-tool")
+                        let read_output = Command::new(get_pkcs11_tool_path())
                             .args([
                                 "--module", &driver,
                                 "--read-object",
@@ -713,7 +729,7 @@ async fn handle_connection(mut stream: TcpStream, keys: Arc<AgentKeys>) -> Resul
                     if is_probe {
                         // Probe: just read certificate after logging in (no signing required)
                         let temp_cert_path = format!("{}/temp_cert_{}.der", dot_uid, raw_id);
-                        let read_output = Command::new("pkcs11-tool")
+                        let read_output = Command::new(get_pkcs11_tool_path())
                             .args([
                                 "--module", &driver,
                                 "--login",
@@ -739,7 +755,7 @@ async fn handle_connection(mut stream: TcpStream, keys: Arc<AgentKeys>) -> Resul
 
                         if !read_ok && cert_id == "usb_auto_detected" {
                             // Fallback: list objects to find real ID
-                            let list_output = Command::new("pkcs11-tool")
+                            let list_output = Command::new(get_pkcs11_tool_path())
                                 .args([
                                     "--module", &driver,
                                     "--login",
@@ -764,7 +780,7 @@ async fn handle_connection(mut stream: TcpStream, keys: Arc<AgentKeys>) -> Resul
                             if let Some(rid) = resolved_id {
                                 raw_id = rid;
                                 let temp_cert_path2 = format!("{}/temp_cert_{}.der", dot_uid, raw_id);
-                                let read_output2 = Command::new("pkcs11-tool")
+                                let read_output2 = Command::new(get_pkcs11_tool_path())
                                     .args([
                                         "--module", &driver,
                                         "--login",
@@ -807,7 +823,7 @@ async fn handle_connection(mut stream: TcpStream, keys: Arc<AgentKeys>) -> Resul
                             
                             let _ = fs::write(&temp_hash_path, &hash_bytes);
                             
-                            let sign_output = Command::new("pkcs11-tool")
+                            let sign_output = Command::new(get_pkcs11_tool_path())
                                 .args([
                                     "--module", &driver,
                                     "--login",
@@ -835,7 +851,7 @@ async fn handle_connection(mut stream: TcpStream, keys: Arc<AgentKeys>) -> Resul
                                     // Only read cert data if requested as auto-detect (browser needs it to update state)
                                     if cert_id == "usb_auto_detected" {
                                         let temp_cert_path = format!("{}/temp_cert_{}.der", dot_uid, raw_id);
-                                        let read_output = Command::new("pkcs11-tool")
+                                        let read_output = Command::new(get_pkcs11_tool_path())
                                             .args([
                                                 "--module", &driver,
                                                 "--read-object",
