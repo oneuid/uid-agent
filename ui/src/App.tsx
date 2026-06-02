@@ -10,7 +10,8 @@ import {
   IconInfoCircle,
   IconPlayerPlay,
   IconPlayerStop,
-  IconCloudDownload
+  IconCloudDownload,
+  IconPin
 } from '@tabler/icons-react';
 
 interface Certificate {
@@ -85,7 +86,7 @@ export default function App() {
 
   const handleLaunchZalo = async () => {
     setLoading(true);
-    setLog('Starting Zalo in sandbox...');
+    setLog('Starting Zalo inside Wine container...');
     try {
       await invoke('launch_app', { appId: 'zalo' });
       setLog('Zalo launched successfully.');
@@ -108,6 +109,15 @@ export default function App() {
       setLog(`Error stopping app: ${e}`);
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handlePinApp = async (appId: 'agent' | 'zalo') => {
+    try {
+      const res = await invoke<string>('pin_to_dock', { appId });
+      setLog(res);
+    } catch (e: any) {
+      setLog(`Error pinning app to GNOME Dock: ${e}`);
     }
   };
 
@@ -164,6 +174,14 @@ export default function App() {
               <IconInfoCircle size={14} />
               <span>Version 3.0.0 (Linux)</span>
             </div>
+            <button 
+              className="btn btn-secondary pin-sidebar-btn" 
+              onClick={() => handlePinApp('agent')}
+              style={{ marginTop: '8px', width: '100%', fontSize: '11px', padding: '6px', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '4px' }}
+            >
+              <IconPin size={12} className="gold-icon" />
+              <span>Pin Agent to Dock</span>
+            </button>
           </div>
         </aside>
 
@@ -323,6 +341,15 @@ export default function App() {
                         </button>
                         <button 
                           className="btn btn-secondary"
+                          onClick={() => handlePinApp('zalo')}
+                          disabled={loading}
+                          title="Pin Zalo standalone app to GNOME Dock"
+                        >
+                          <IconPin size={18} className="gold-icon" />
+                          <span>Pin to Dock</span>
+                        </button>
+                        <button 
+                          className="btn btn-secondary"
                           onClick={handleInstallZalo}
                           disabled={loading}
                         >
@@ -332,14 +359,24 @@ export default function App() {
                     )}
 
                     {zaloStatus === 'running' && (
-                      <button 
-                        className="btn btn-danger"
-                        onClick={handleStopZalo}
-                        disabled={loading}
-                      >
-                        <IconPlayerStop size={18} />
-                        <span>Stop Sandbox</span>
-                      </button>
+                      <div className="btn-group">
+                        <button 
+                          className="btn btn-danger"
+                          onClick={handleStopZalo}
+                          disabled={loading}
+                        >
+                          <IconPlayerStop size={18} />
+                          <span>Stop Sandbox</span>
+                        </button>
+                        <button 
+                          className="btn btn-secondary"
+                          onClick={() => handlePinApp('zalo')}
+                          disabled={loading}
+                        >
+                          <IconPin size={18} className="gold-icon" />
+                          <span>Pin to Dock</span>
+                        </button>
+                      </div>
                     )}
                   </div>
                 </div>

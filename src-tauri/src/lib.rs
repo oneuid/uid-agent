@@ -53,6 +53,48 @@ fn check_app_status(app_id: String) -> serde_json::Value {
 }
 
 #[tauri::command]
+fn pin_to_dock(app_id: String) -> Result<String, String> {
+    let desktop_filename = if app_id == "agent" {
+        "uid-agent-desktop.desktop"
+    } else if app_id == "zalo" {
+        "zalo-sandbox.desktop"
+    } else {
+        return Err("Unsupported app".to_string());
+    };
+
+    // GNOME gsettings command to get current favorites and append our desktop file
+    let output = Command::new("gsettings")
+        .args(&["get", "org.gnome.shell", "favorite-apps"])
+        .output()
+        .map_err(|e| format!("Failed to get GNOME settings: {}", e))?;
+
+    let favorites_str = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if favorites_str.contains(desktop_filename) {
+        return Ok("Already pinned to Dock".to_string());
+    }
+
+    // Append to GNOME favorite-apps array
+    let new_favorites = if favorites_str == "@as []" || favorites_str == "[]" {
+        format!("['{}']", desktop_filename)
+    } else {
+        // Remove trailing bracket and append
+        let trimmed = favorites_str.trim_end_matches(']');
+        format!("{trimmed}, '{desktop_filename}']")
+    };
+
+    let status = Command::new("gsettings")
+        .args(&["set", "org.gnome.shell", "favorite-apps", &new_favorites])
+        .status()
+        .map_err(|e| format!("Failed to set GNOME settings: {}", e))?;
+
+    if status.success() {
+        Ok(format!("Successfully pinned {} to Dock", desktop_filename))
+    } else {
+        Err("Failed to update GNOME favorites".to_string())
+    }
+}
+
+#[tauri::command]
 async fn install_app(app_id: String) -> Result<String, String> {
     if app_id != "zalo" {
         return Err("Unsupported application".to_string());
@@ -83,7 +125,7 @@ async fn install_app(app_id: String) -> Result<String, String> {
     let wine_volume_mount = format!("{}:/home/wineuser/.wine", wine_persist_dir);
     let downloads_volume_mount = format!("{}:/home/wineuser/downloads", downloads_dir);
 
-    // Create the container with X11, audio, GPU acceleration and persistent storage mounts
+    // Create the container with X11, audio, GPU acceleration and persistent storage mounts, tail -f to keep alive
     let create_status = Command::new("docker")
         .args(&[
             "run", "-d",
@@ -97,13 +139,14 @@ async fn install_app(app_id: String) -> Result<String, String> {
             "--device", "/dev/dri",
             "-v", &wine_volume_mount,
             "-v", &downloads_volume_mount,
-            "scottyhardy/docker-wine:latest"
+            "scottyhardy/docker-wine:latest",
+            "tail", "-f", "/dev/null"
         ])
         .status()
         .map_err(|e| format!("Failed to create container: {}", e))?;
 
     if !create_status.success() {
-        // Container might already exist but stopped, recreate it to update configuration
+        // Container might already exist, remove and recreate
         let _ = Command::new("docker").args(&["stop", "uid-zalo"]).status();
         let _ = Command::new("docker").args(&["rm", "uid-zalo"]).status();
         
@@ -120,7 +163,8 @@ async fn install_app(app_id: String) -> Result<String, String> {
                 "--device", "/dev/dri",
                 "-v", &wine_volume_mount,
                 "-v", &downloads_volume_mount,
-                "scottyhardy/docker-wine:latest"
+                "scottyhardy/docker-wine:latest",
+                "tail", "-f", "/dev/null"
             ])
             .status();
         if retry_status.is_err() || !retry_status.unwrap().success() {
@@ -132,10 +176,11 @@ async fn install_app(app_id: String) -> Result<String, String> {
     let desktop_dir = format!("{}/.local/share/applications", home);
     let _ = std::fs::create_dir_all(&desktop_dir);
     
+    // The Exec command checks if zalo is installed, if not, runs ZaloSetup.exe first
     let desktop_content = "[Desktop Entry]\n\
                            Name=Zalo (UID Sandbox)\n\
                            Comment=Run Zalo safely inside a Docker container\n\
-                           Exec=docker start uid-zalo\n\
+                           Exec=docker start uid-zalo && docker exec -d uid-zalo bash -c \"[ -f /home/wineuser/.wine/drive_c/users/wineuser/AppData/Local/Programs/Zalo/Zalo.exe ] && wine /home/wineuser/.wine/drive_c/users/wineuser/AppData/Local/Programs/Zalo/Zalo.exe || (curl -L -o /home/wineuser/downloads/ZaloSetup.exe https://chat.zalo.me/download/html5/ZaloSetup.exe && wine /home/wineuser/downloads/ZaloSetup.exe)\"\n\
                            Icon=zalo\n\
                            Terminal=false\n\
                            Type=Application\n\
@@ -144,7 +189,30 @@ async fn install_app(app_id: String) -> Result<String, String> {
     std::fs::write(format!("{}/zalo-sandbox.desktop", desktop_dir), desktop_content)
         .map_err(|e| format!("Failed to write desktop shortcut: {}", e))?;
 
-    Ok("Successfully installed Zalo in Docker sandbox with persistent storage and registered desktop shortcut.".to_string())
+    // Download and install inside container in background task
+    tauri::async_runtime::spawn(async move {
+        // Run curl inside container to download ZaloSetup.exe
+        let _ = Command::new("docker")
+            .args(&[
+                "exec",
+                "uid-zalo",
+                "curl", "-L", "-o", "/home/wineuser/downloads/ZaloSetup.exe",
+                "https://chat.zalo.me/download/html5/ZaloSetup.exe"
+            ])
+            .status();
+
+        // Run installer
+        let _ = Command::new("docker")
+            .args(&[
+                "exec", "-d",
+                "uid-zalo",
+                "wine",
+                "/home/wineuser/downloads/ZaloSetup.exe"
+            ])
+            .status();
+    });
+
+    Ok("Successfully configured container. Downloading Zalo installer inside container and starting Wine setup...".to_string())
 }
 
 #[tauri::command]
@@ -153,16 +221,52 @@ async fn launch_app(app_id: String) -> Result<(), String> {
         return Err("Unsupported application".to_string());
     }
 
-    let status = Command::new("docker")
+    // Start container
+    let _ = Command::new("docker")
         .args(&["start", "uid-zalo"])
         .status()
         .map_err(|e| format!("Failed to start container: {}", e))?;
 
-    if status.success() {
-        Ok(())
+    let home = std::env::var("HOME").unwrap_or_else(|_| "/home/s".to_string());
+    
+    // Check if Zalo is installed
+    let zalo_path = format!("{}/.local/share/uid/apps/zalo/wineprefix/drive_c/users/wineuser/AppData/Local/Programs/Zalo/Zalo.exe", home);
+    let is_installed = std::path::Path::new(&zalo_path).exists();
+
+    if is_installed {
+        // Run Zalo
+        Command::new("docker")
+            .args(&[
+                "exec", "-d",
+                "uid-zalo",
+                "wine",
+                "/home/wineuser/.wine/drive_c/users/wineuser/AppData/Local/Programs/Zalo/Zalo.exe"
+            ])
+            .status()
+            .map_err(|e| format!("Failed to launch Zalo: {}", e))?;
     } else {
-        Err("Failed to start container".to_string())
+        // Zalo is not installed, download and run installer inside container (no permission issue)
+        let _ = Command::new("docker")
+            .args(&[
+                "exec",
+                "uid-zalo",
+                "curl", "-L", "-o", "/home/wineuser/downloads/ZaloSetup.exe",
+                "https://chat.zalo.me/download/html5/ZaloSetup.exe"
+            ])
+            .status();
+
+        Command::new("docker")
+            .args(&[
+                "exec", "-d",
+                "uid-zalo",
+                "wine",
+                "/home/wineuser/downloads/ZaloSetup.exe"
+            ])
+            .status()
+            .map_err(|e| format!("Failed to launch Zalo Setup: {}", e))?;
     }
+
+    Ok(())
 }
 
 #[tauri::command]
@@ -253,7 +357,8 @@ pub fn run() {
             check_app_status,
             install_app,
             launch_app,
-            stop_app
+            stop_app,
+            pin_to_dock
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
