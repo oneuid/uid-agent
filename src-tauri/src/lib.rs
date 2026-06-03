@@ -900,7 +900,7 @@ async fn install_browser_extension(custom_chrome_id: Option<String>) -> Result<S
     }
 
     // 4. Firefox profile .xpi injection
-    let firefox_zip_bytes = include_bytes!("../../../uid-link/uid-link-firefox.zip");
+    let firefox_zip_bytes = include_bytes!("../resources/uid-link-firefox.zip");
     
     let ff_profiles_dir = if cfg!(target_os = "windows") {
         std::env::var("APPDATA").map(|d| format!("{}/Mozilla/Firefox/Profiles", d)).ok()
