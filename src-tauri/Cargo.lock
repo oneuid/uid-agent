@@ -4530,7 +4530,7 @@ dependencies = [
 
 [[package]]
 name = "uid-agent-desktop"
-version = "3.0.11"
+version = "3.0.12"
 dependencies = [
  "base64 0.22.1",
  "log",

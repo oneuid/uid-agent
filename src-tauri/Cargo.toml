@@ -1,6 +1,6 @@
 [package]
 name = "uid-agent-desktop"
-version = "3.0.11"
+version = "3.0.12"
 description = "UID Agent Desktop Application"
 authors = ["UID Team"]
 license = "MIT"
