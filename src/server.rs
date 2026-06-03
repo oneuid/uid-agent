@@ -446,65 +446,83 @@ fn get_driver_paths() -> Vec<String> {
 }
 
 pub async fn start_web_server(keys: Arc<AgentKeys>) -> Result<(), Box<dyn std::error::Error>> {
-    let mut bound_any = false;
-    let (tx, mut rx) = tokio::sync::mpsc::channel::<(TcpStream, Arc<AgentKeys>)>(100);
+    loop {
+        let mut bound_any = false;
+        let (tx, mut rx) = tokio::sync::mpsc::channel::<(TcpStream, Arc<AgentKeys>)>(100);
 
-    // Bind to IPv4 loopback
-    let addr_v4 = "127.0.0.1:13013";
-    let tx_v4 = tx.clone();
-    let keys_v4 = keys.clone();
-    match TcpListener::bind(addr_v4).await {
-        Ok(listener) => {
-            bound_any = true;
-            println!("[uid-agent] Local signing HTTP server listening on http://{}", addr_v4);
-            tokio::spawn(async move {
-                loop {
-                    if let Ok((stream, _)) = listener.accept().await {
-                        let _ = tx_v4.send((stream, keys_v4.clone())).await;
-                    }
-                }
-            });
-        }
-        Err(e) => {
-            eprintln!("[uid-agent] Failed to bind to IPv4 loopback 127.0.0.1:13013: {:?}", e);
-        }
-    }
-
-    // Bind to IPv6 loopback
-    let addr_v6 = "[::1]:13013";
-    let tx_v6 = tx.clone();
-    let keys_v6 = keys.clone();
-    match TcpListener::bind(addr_v6).await {
-        Ok(listener) => {
-            bound_any = true;
-            println!("[uid-agent] Local signing HTTP server listening on http://{}", addr_v6);
-            tokio::spawn(async move {
-                loop {
-                    if let Ok((stream, _)) = listener.accept().await {
-                        let _ = tx_v6.send((stream, keys_v6.clone())).await;
-                    }
-                }
-            });
-        }
-        Err(e) => {
-            eprintln!("[uid-agent] Note: Could not bind to IPv6 loopback [::1]:13013 (IPv6 might be disabled): {:?}", e);
-        }
-    }
-
-    if !bound_any {
-        return Err("Failed to bind to either IPv4 or IPv6 loopback addresses on port 13013".into());
-    }
-
-    // Handle all incoming connections from either loopback address
-    while let Some((stream, keys_clone)) = rx.recv().await {
-        tokio::spawn(async move {
-            if let Err(e) = handle_connection(stream, keys_clone).await {
-                eprintln!("[uid-agent] Web server connection error: {:?}", e);
+        // Bind to IPv4 loopback
+        let addr_v4 = "127.0.0.1:13013";
+        let tx_v4 = tx.clone();
+        let keys_v4 = keys.clone();
+        let mut listener_v4 = None;
+        match TcpListener::bind(addr_v4).await {
+            Ok(listener) => {
+                bound_any = true;
+                println!("[uid-agent] Local signing HTTP server listening on http://{}", addr_v4);
+                listener_v4 = Some(listener);
             }
-        });
-    }
+            Err(e) => {
+                eprintln!("[uid-agent] Failed to bind to IPv4 loopback 127.0.0.1:13013: {:?}", e);
+            }
+        }
 
-    Ok(())
+        // Bind to IPv6 loopback
+        let addr_v6 = "[::1]:13013";
+        let tx_v6 = tx.clone();
+        let keys_v6 = keys.clone();
+        let mut listener_v6 = None;
+        match TcpListener::bind(addr_v6).await {
+            Ok(listener) => {
+                bound_any = true;
+                println!("[uid-agent] Local signing HTTP server listening on http://{}", addr_v6);
+                listener_v6 = Some(listener);
+            }
+            Err(e) => {
+                eprintln!("[uid-agent] Note: Could not bind to IPv6 loopback [::1]:13013 (IPv6 might be disabled): {:?}", e);
+            }
+        }
+
+        if bound_any {
+            // Spawn listener accept tasks
+            if let Some(listener) = listener_v4 {
+                let tx_v4_clone = tx_v4.clone();
+                let keys_v4_clone = keys_v4.clone();
+                tokio::spawn(async move {
+                    loop {
+                        if let Ok((stream, _)) = listener.accept().await {
+                            let _ = tx_v4_clone.send((stream, keys_v4_clone.clone())).await;
+                        }
+                    }
+                });
+            }
+
+            if let Some(listener) = listener_v6 {
+                let tx_v6_clone = tx_v6.clone();
+                let keys_v6_clone = keys_v6.clone();
+                tokio::spawn(async move {
+                    loop {
+                        if let Ok((stream, _)) = listener.accept().await {
+                            let _ = tx_v6_clone.send((stream, keys_v6_clone.clone())).await;
+                        }
+                    }
+                });
+            }
+
+            // Handle all incoming connections from either loopback address
+            while let Some((stream, keys_clone)) = rx.recv().await {
+                tokio::spawn(async move {
+                    if let Err(e) = handle_connection(stream, keys_clone).await {
+                        eprintln!("[uid-agent] Web server connection error: {:?}", e);
+                    }
+                });
+            }
+        }
+
+        // If we reach here, it means either bound_any was false, or rx closed.
+        // Wait 5 seconds before attempting to bind again.
+        println!("[uid-agent] Web server port 13013 is already in use or unavailable. Retrying in 5 seconds...");
+        tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
+    }
 }
 
 // Scans for active PKCS#11 module and parses the active token label

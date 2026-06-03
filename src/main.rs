@@ -93,7 +93,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
 
             let keys = Arc::new(AgentKeys::load_or_create()?);
-            let core_url = env::var("UID_CORE_URL").unwrap_or_else(|_| "http://127.0.0.1:8000".to_string());
+            let core_url = env::var("UID_CORE_URL").unwrap_or_else(|_| "https://api.uid.one".to_string());
             
             let ws_client = AgentWebSocketClient::new(keys, core_url);
             ws_client.listen_and_sign(challenge_token, auth_token).await?;

@@ -123,16 +123,101 @@ async fn show_notification(title: String, body: String) -> Result<(), String> {
     Ok(())
 }
 
+async fn save_text_to_vault(text: String, _app_handle: tauri::AppHandle) -> Result<(), String> {
+    let user_profile = match get_user_profile().await {
+        Some(profile) => profile,
+        None => {
+            let _ = show_notification(
+                "UID Agent".to_string(),
+                "Please log in to your UID Agent account to save this to the Agent.".to_string()
+            ).await;
+            return Err("User not logged in".to_string());
+        }
+    };
+
+    let text_trimmed = text.chars().take(20).collect::<String>();
+    let title = format!("Zalo Clip: {}...", text_trimmed);
+
+    let signature_b64 = {
+        let keys = uid_agent::crypto::AgentKeys::load_or_create();
+        if let Ok(ref k) = keys {
+            let sig = k.sign(text.as_bytes());
+            use base64::{Engine as _, engine::general_purpose};
+            general_purpose::STANDARD.encode(sig.to_bytes())
+        } else {
+            "".to_string()
+        }
+    };
+
+    let core_url = std::env::var("UID_CORE_URL").unwrap_or_else(|_| "https://api.uid.one".to_string());
+    let request_url = format!("{}/api/v1/vault/records/", core_url);
+
+    let client = reqwest::Client::new();
+    let body = json!({
+        "title": title,
+        "type": "NOTE",
+        "payload": text,
+        "issuer": "uid-agent",
+        "signature": signature_b64
+    });
+
+    match client.post(&request_url)
+        .header("Authorization", format!("Bearer {}", user_profile.token))
+        .json(&body)
+        .send()
+        .await 
+    {
+        Ok(resp) => {
+            if resp.status().is_success() {
+                let _ = show_notification(
+                    "UID Agent".to_string(),
+                    "Message successfully saved to UID Agent!".to_string()
+                ).await;
+                Ok(())
+            } else {
+                let status_err = resp.status();
+                let err_text = resp.text().await.unwrap_or_default();
+                eprintln!("Vault save failed: status={}, body={}", status_err, err_text);
+                let _ = show_notification(
+                    "UID Agent".to_string(),
+                    format!("Save failed: Server returned error status {}", status_err)
+                ).await;
+                Err(format!("Server returned error: {}", status_err))
+            }
+        }
+        Err(e) => {
+            eprintln!("Vault save connection error: {:?}", e);
+            let _ = show_notification(
+                "UID Agent".to_string(),
+                "Could not connect to the UID Server!".to_string()
+            ).await;
+            Err(e.to_string())
+        }
+    }
+}
+
 
 #[tauri::command]
 async fn launch_sandbox_app(app_id: String, app_name: String, url: String, app_handle: tauri::AppHandle) -> Result<(), String> {
+    launch_sandbox_app_opt(app_id, app_name, url, app_handle, true).await
+}
+
+async fn launch_sandbox_app_opt(
+    app_id: String,
+    app_name: String,
+    url: String,
+    app_handle: tauri::AppHandle,
+    show_initially: bool,
+) -> Result<(), String> {
     let window_id = format!("sandbox_{}", app_id);
     let title = format!("UID Sandbox - {} (Isolated Data)", app_name);
     
     // Check if the window is already open. If so, focus it.
     if let Some(existing_window) = app_handle.get_webview_window(&window_id) {
-        let _ = existing_window.show();
-        let _ = existing_window.set_focus();
+        if show_initially {
+            let _ = existing_window.show();
+            let _ = existing_window.set_focus();
+        }
         return Ok(());
     }
 
@@ -170,8 +255,9 @@ async fn launch_sandbox_app(app_id: String, app_name: String, url: String, app_h
     .title(&title)
     .inner_size(1024.0, 768.0)
     .resizable(true)
+    .visible(show_initially)
     .devtools(true)
-    .initialization_script(r#"
+    .initialization_script(r##"
         (function() {
             window.__tauriPasteImage = function(base64Data) {
                 fetch(base64Data)
@@ -194,6 +280,19 @@ async fn launch_sandbox_app(app_id: String, app_name: String, url: String, app_h
                     });
             };
 
+            let lastTriggerTime = 0;
+            function triggerTauriPaste() {
+                const now = Date.now();
+                if (now - lastTriggerTime < 500) return;
+                lastTriggerTime = now;
+
+                const iframe = document.createElement('iframe');
+                iframe.style.display = 'none';
+                iframe.src = "uid-paste://trigger?" + now;
+                document.body.appendChild(iframe);
+                setTimeout(function() { iframe.remove(); }, 1000);
+            }
+
             window.addEventListener('paste', function(e) {
                 if (e.__isCustomPaste) return;
                 if (e.clipboardData && (e.clipboardData.getData('text') || e.clipboardData.getData('text/html'))) {
@@ -205,8 +304,7 @@ async fn launch_sandbox_app(app_id: String, app_name: String, url: String, app_h
                 e.preventDefault();
                 e.stopImmediatePropagation();
                 
-                // Trigger custom navigation protocol to communicate with Rust
-                window.location.href = "uid-paste://trigger?" + Date.now();
+                triggerTauriPaste();
             }, true);
 
             window.addEventListener('keydown', function(e) {
@@ -218,14 +316,156 @@ async fn launch_sandbox_app(app_id: String, app_name: String, url: String, app_h
                         target.contentEditable === 'true' ||
                         target.getAttribute('contenteditable') === 'true'
                     )) {
-                        // Trigger custom scheme to let Rust check clipboard image
-                        window.location.href = "uid-paste://trigger?" + Date.now();
+                        triggerTauriPaste();
                     }
                 }
             }, true);
-        })();
-    "#);
 
+            // Custom Context Menu to save selected text to UID Vault
+            (function() {
+                let activeMenu = null;
+                
+                function extractMessageText(target) {
+                    let current = target;
+                    while (current && current !== document.body) {
+                        const classes = current.className;
+                        if (typeof classes === 'string') {
+                            const lower = classes.toLowerCase();
+                            if (lower.includes('msg-') || lower.includes('message') || lower.includes('bubble') || lower.includes('card')) {
+                                const textEl = current.querySelector('.card--text, .msg-text, [class*="text"]');
+                                let text = textEl ? textEl.innerText : current.innerText;
+                                if (text) {
+                                    text = text.trim();
+                                    if (text.length > 0) return text;
+                                }
+                            }
+                        }
+                        current = current.parentElement;
+                    }
+                    current = target;
+                    while (current && current !== document.body) {
+                        let text = current.innerText || current.textContent;
+                        if (text) {
+                            text = text.trim();
+                            if (text.length > 0 && text.length < 1500) {
+                                return text;
+                            }
+                        }
+                        current = current.parentElement;
+                    }
+                    return null;
+                }
+                
+                document.addEventListener('contextmenu', function(e) {
+                    let selectedText = window.getSelection().toString().trim();
+                    if (!selectedText) {
+                        selectedText = extractMessageText(e.target);
+                    }
+                    
+                    if (!selectedText) {
+                        if (activeMenu) { activeMenu.remove(); activeMenu = null; }
+                        return;
+                    }
+                    
+                    e.preventDefault();
+                    e.stopPropagation();
+                    e.stopImmediatePropagation();
+                    
+                    if (activeMenu) { activeMenu.remove(); }
+                    
+                    const menu = document.createElement('div');
+                    menu.style.position = 'fixed';
+                    menu.style.top = e.clientY + 'px';
+                    menu.style.left = e.clientX + 'px';
+                    menu.style.backgroundColor = '#111827';
+                    menu.style.border = '1px solid #374151';
+                    menu.style.borderRadius = '8px';
+                    menu.style.padding = '6px 0';
+                    menu.style.boxShadow = '0 10px 15px -3px rgba(0, 0, 0, 0.5), 0 4px 6px -2px rgba(0, 0, 0, 0.5)';
+                    menu.style.zIndex = '999999';
+                    menu.style.fontFamily = 'system-ui, -apple-system, sans-serif';
+                    menu.style.minWidth = '180px';
+                    
+                    // Item 1: Save to Agent
+                    const item = document.createElement('div');
+                    item.style.padding = '8px 14px';
+                    item.style.cursor = 'pointer';
+                    item.style.color = '#f3f4f6';
+                    item.style.fontSize = '13px';
+                    item.style.display = 'flex';
+                    item.style.alignItems = 'center';
+                    item.style.gap = '8px';
+                    item.style.transition = 'background-color 0.2s';
+                    
+                    item.innerHTML = `
+                        <svg viewBox="0 0 24 24" width="16" height="16" stroke="#fbbf24" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round">
+                            <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path>
+                        </svg>
+                        <span style="font-weight: 500;">Save to Agent</span>
+                    `;
+                    
+                    item.addEventListener('mouseenter', () => {
+                        item.style.backgroundColor = '#1f2937';
+                    });
+                    item.addEventListener('mouseleave', () => {
+                        item.style.backgroundColor = 'transparent';
+                    });
+                    
+                    item.addEventListener('click', () => {
+                        const iframe = document.createElement('iframe');
+                        iframe.style.display = 'none';
+                        iframe.src = "uid-vault://save?text=" + encodeURIComponent(selectedText);
+                        document.body.appendChild(iframe);
+                        setTimeout(() => iframe.remove(), 1000);
+                        menu.remove();
+                        activeMenu = null;
+                    });
+                    
+                    // Item 2: Copy Text
+                    const copyItem = document.createElement('div');
+                    copyItem.style.padding = '8px 14px';
+                    copyItem.style.cursor = 'pointer';
+                    copyItem.style.color = '#f3f4f6';
+                    copyItem.style.fontSize = '13px';
+                    copyItem.style.display = 'flex';
+                    copyItem.style.alignItems = 'center';
+                    copyItem.style.gap = '8px';
+                    copyItem.style.transition = 'background-color 0.2s';
+                    
+                    copyItem.innerHTML = `
+                        <svg viewBox="0 0 24 24" width="16" height="16" stroke="#9ca3af" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round">
+                            <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+                            <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+                        </svg>
+                        <span style="font-weight: 500;">Copy Text</span>
+                    `;
+                    
+                    copyItem.addEventListener('mouseenter', () => {
+                        copyItem.style.backgroundColor = '#1f2937';
+                    });
+                    copyItem.addEventListener('mouseleave', () => {
+                        copyItem.style.backgroundColor = 'transparent';
+                    });
+                    
+                    copyItem.addEventListener('click', () => {
+                        navigator.clipboard.writeText(selectedText).then(() => {
+                            menu.remove();
+                            activeMenu = null;
+                        });
+                    });
+                    
+                    menu.appendChild(item);
+                    menu.appendChild(copyItem);
+                    document.body.appendChild(menu);
+                    activeMenu = menu;
+                }, true); // Use capture phase to intercept before Zalo's inner handlers
+                
+                document.addEventListener('click', function() {
+                    if (activeMenu) { activeMenu.remove(); activeMenu = null; }
+                });
+            })();
+        })();
+    "##);
 
     let app_handle_clone = app_handle.clone();
     let window_id_clone = window_id.clone();
@@ -248,7 +488,37 @@ async fn launch_sandbox_app(app_id: String, app_name: String, url: String, app_h
             });
             return false;
         }
+        if url.scheme() == "uid-vault" {
+            let app_handle = app_handle_clone.clone();
+            let url_clone = url.clone();
+            tauri::async_runtime::spawn(async move {
+                let text = url_clone.query_pairs()
+                    .find(|(k, _)| k == "text")
+                    .map(|(_, v)| v.into_owned())
+                    .unwrap_or_default();
+                if !text.is_empty() {
+                    let _ = save_text_to_vault(text, app_handle).await;
+                }
+            });
+            return false;
+        }
         true
+    })
+    .on_download(move |_, event| {
+        match event {
+            tauri::webview::DownloadEvent::Requested { url: _, destination } => {
+                let home = get_home_dir();
+                let download_dir = std::path::Path::new(&home).join("Downloads");
+                let _ = std::fs::create_dir_all(&download_dir);
+                if let Some(filename) = destination.file_name() {
+                    *destination = download_dir.join(filename);
+                } else {
+                    *destination = download_dir.join("downloaded_file");
+                }
+                true
+            }
+            _ => true,
+        }
     });
 
     #[cfg(not(target_os = "macos"))]
@@ -269,8 +539,10 @@ async fn launch_sandbox_app(app_id: String, app_name: String, url: String, app_h
 
     match window_builder.build() {
         Ok(win) => {
-            let _ = win.show();
-            let _ = win.set_focus();
+            if show_initially {
+                let _ = win.show();
+                let _ = win.set_focus();
+            }
             Ok(())
         }
         Err(e) => Err(e.to_string()),
@@ -1505,33 +1777,26 @@ pub fn run() {
                 })
                 .build(app)?;
 
+            // Automatically launch Zalo sandbox in background (hidden) at startup for background syncing
+            let app_handle_zalo = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+                let _ = launch_sandbox_app_opt(
+                    "zalo".to_string(),
+                    "Zalo Messenger".to_string(),
+                    "https://chat.zalo.me/".to_string(),
+                    app_handle_zalo,
+                    false,
+                ).await;
+            });
+
             Ok(())
         })
         // 2. Hide window when closed instead of terminating application
         .on_window_event(|window, event| match event {
             WindowEvent::CloseRequested { api, .. } => {
-                if window.label() == "main" {
-                    api.prevent_close();
-                    window.hide().unwrap();
-                } else {
-                    // Sandbox window close: exit app if no other visible windows exist
-                    let app_handle = window.app_handle().clone();
-                    let window_label = window.label().to_string();
-                    tauri::async_runtime::spawn(async move {
-                        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-                        let mut visible_windows = 0;
-                        for (label, win) in app_handle.webview_windows() {
-                            if label != window_label {
-                                if let Ok(true) = win.is_visible() {
-                                    visible_windows += 1;
-                                }
-                            }
-                        }
-                        if visible_windows == 0 {
-                            app_handle.exit(0);
-                        }
-                    });
-                }
+                api.prevent_close();
+                let _ = window.hide();
             }
             _ => {}
         })
