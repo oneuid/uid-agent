@@ -26,7 +26,7 @@ UID Agent now features a beautiful **Tauri-powered Desktop GUI Dashboard** and a
 ### 1. Install Build Dependencies
 To compile Tauri and its windowing controls on Debian/Ubuntu, run:
 ```bash
-sudo apt update && sudo apt install -y libdbus-1-dev pkg-config libwebkit2gtk-4.1-dev libssl-dev libgtk-3-dev libayatana-appindicator3-dev
+sudo apt update && sudo apt install -y libdbus-1-dev pkg-config libwebkit2gtk-4.1-dev libssl-dev libgtk-3-dev libayatana-appindicator3-dev wl-clipboard xclip
 ```
 
 ### 2. Build and Package (.deb)

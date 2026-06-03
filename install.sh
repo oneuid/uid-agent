@@ -6,6 +6,51 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd 2>/dev/null || pwd)"
 
 echo "[uid-agent] Starting installation on Linux..."
 
+# Install runtime and build dependencies if missing on Debian/Ubuntu
+if [ -f /etc/debian_version ]; then
+    MISSING_DEPS=()
+    
+    # 1. Runtime clipboard and notification dependencies
+    if ! command -v wl-paste &> /dev/null; then
+        MISSING_DEPS+=("wl-clipboard")
+    fi
+    if ! command -v xclip &> /dev/null; then
+        MISSING_DEPS+=("xclip")
+    fi
+    if ! command -v notify-send &> /dev/null; then
+        MISSING_DEPS+=("libnotify-bin")
+    fi
+    
+    # 2. Build dependencies (only if building from source is possible)
+    if [ -f "$SCRIPT_DIR/Cargo.toml" ]; then
+        BUILD_DEPS=("libdbus-1-dev" "pkg-config" "libwebkit2gtk-4.1-dev" "libssl-dev" "libgtk-3-dev" "libayatana-appindicator3-dev" "build-essential")
+        for dep in "${BUILD_DEPS[@]}"; do
+            if ! dpkg -s "$dep" &> /dev/null; then
+                MISSING_DEPS+=("$dep")
+            fi
+        done
+        
+        # Check node/npm for UI assets compilation
+        if [ -d "$SCRIPT_DIR/ui" ]; then
+            if ! command -v node &> /dev/null; then
+                MISSING_DEPS+=("nodejs")
+            fi
+            if ! command -v npm &> /dev/null; then
+                MISSING_DEPS+=("npm")
+            fi
+        fi
+    fi
+    
+    if [ ${#MISSING_DEPS[@]} -ne 0 ]; then
+        echo "[uid-agent] Installing missing dependencies: ${MISSING_DEPS[*]}..."
+        if command -v sudo &> /dev/null; then
+            sudo apt-get update && sudo apt-get install -y "${MISSING_DEPS[@]}"
+        else
+            echo "[WARNING] sudo is not available. Please install manually: apt-get install -y ${MISSING_DEPS[*]}"
+        fi
+    fi
+fi
+
 # Create target directories
 BIN_DIR="$HOME/.local/bin"
 mkdir -p "$BIN_DIR"
@@ -36,6 +81,18 @@ if [ -f "$SCRIPT_DIR/Cargo.toml" ] && command -v cargo &> /dev/null; then
     # 2. Build UI assets
     if [ -d "$SCRIPT_DIR/ui" ]; then
         echo "[uid-agent] Compiling UI assets..."
+        if ! command -v pnpm &> /dev/null; then
+            echo "[uid-agent] pnpm not found. Installing pnpm..."
+            if command -v npm &> /dev/null; then
+                if command -v sudo &> /dev/null; then
+                    sudo npm install -g pnpm
+                else
+                    npm install -g pnpm || true
+                fi
+            else
+                echo "[WARNING] npm not found. Please install nodejs and pnpm manually."
+            fi
+        fi
         (cd "$SCRIPT_DIR/ui" && pnpm install && pnpm build)
     fi
     

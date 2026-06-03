@@ -54,7 +54,7 @@ fn get_home_dir() -> String {
 }
 
 #[tauri::command]
-fn get_user_profile() -> Option<UserProfile> {
+async fn get_user_profile() -> Option<UserProfile> {
     let base_dir = uid_agent::get_uid_data_dir();
     let path = format!("{}/user.json", base_dir);
     if let Ok(content) = std::fs::read_to_string(path) {
@@ -65,7 +65,7 @@ fn get_user_profile() -> Option<UserProfile> {
 }
 
 #[tauri::command]
-fn logout_user() -> Result<(), String> {
+async fn logout_user() -> Result<(), String> {
     let base_dir = uid_agent::get_uid_data_dir();
     let path = format!("{}/user.json", base_dir);
     let _ = std::fs::remove_file(path);
@@ -73,13 +73,59 @@ fn logout_user() -> Result<(), String> {
 }
 
 #[tauri::command]
-fn open_browser_url(url: String) -> Result<(), String> {
-    let _ = new_command("xdg-open").arg(url).status();
+async fn open_browser_url(url: String) -> Result<(), String> {
+    #[cfg(target_os = "windows")]
+    {
+        let _ = new_command("cmd").args(["/C", "start", "", &url]).status();
+    }
+    #[cfg(target_os = "macos")]
+    {
+        let _ = new_command("open").arg(&url).status();
+    }
+    #[cfg(target_os = "linux")]
+    {
+        let _ = new_command("xdg-open").arg(&url).status();
+    }
     Ok(())
 }
 
 #[tauri::command]
-fn launch_sandbox_app(app_id: String, app_name: String, url: String, app_handle: tauri::AppHandle) -> Result<(), String> {
+async fn show_notification(title: String, body: String) -> Result<(), String> {
+    #[cfg(target_os = "windows")]
+    {
+        let powershell_code = format!(
+            "[void] [System.Reflection.Assembly]::LoadWithPartialName('System.Windows.Forms'); \
+             $notification = New-Object System.Windows.Forms.NotifyIcon; \
+             $notification.Icon = [System.Drawing.SystemIcons]::Information; \
+             $notification.BalloonTipTitle = '{}'; \
+             $notification.BalloonTipText = '{}'; \
+             $notification.Visible = $true; \
+             $notification.ShowBalloonTip(5000);",
+            title.replace("'", "''"),
+            body.replace("'", "''")
+        );
+        let _ = new_command("powershell")
+            .args(["-Command", &powershell_code])
+            .status();
+    }
+    #[cfg(target_os = "macos")]
+    {
+        let _ = new_command("osascript")
+            .args(["-e", &format!("display notification \"{}\" with title \"{}\"", body.replace("\"", "\\\""), title.replace("\"", "\\\""))])
+            .status();
+    }
+    #[cfg(target_os = "linux")]
+    {
+        let _ = new_command("notify-send")
+            .args([&title, &body])
+            .status();
+    }
+    Ok(())
+}
+
+
+#[tauri::command]
+async fn launch_sandbox_app(app_id: String, app_name: String, url: String, app_handle: tauri::AppHandle) -> Result<(), String> {
     let window_id = format!("sandbox_{}", app_id);
     let title = format!("UID Sandbox - {} (Isolated Data)", app_name);
     
@@ -121,9 +167,89 @@ fn launch_sandbox_app(app_id: String, app_name: String, url: String, app_handle:
         &window_id,
         tauri::WebviewUrl::External(url.parse().map_err(|e| format!("Invalid URL: {}", e))?)
     )
-    .title(title)
+    .title(&title)
     .inner_size(1024.0, 768.0)
-    .resizable(true);
+    .resizable(true)
+    .devtools(true)
+    .initialization_script(r#"
+        (function() {
+            window.__tauriPasteImage = function(base64Data) {
+                fetch(base64Data)
+                    .then(res => res.blob())
+                    .then(blob => {
+                        const file = new File([blob], 'screenshot.png', { type: 'image/png' });
+                        const dataTransfer = new DataTransfer();
+                        dataTransfer.items.add(file);
+                        const customEvent = new ClipboardEvent('paste', {
+                            bubbles: true,
+                            cancelable: true
+                        });
+                        Object.defineProperty(customEvent, 'clipboardData', {
+                            value: dataTransfer,
+                            writable: false
+                        });
+                        customEvent.__isCustomPaste = true;
+                        const target = document.activeElement || document.body;
+                        target.dispatchEvent(customEvent);
+                    });
+            };
+
+            window.addEventListener('paste', function(e) {
+                if (e.__isCustomPaste) return;
+                if (e.clipboardData && (e.clipboardData.getData('text') || e.clipboardData.getData('text/html'))) {
+                    return;
+                }
+                if (e.clipboardData && e.clipboardData.files && e.clipboardData.files.length > 0) {
+                    return;
+                }
+                e.preventDefault();
+                e.stopImmediatePropagation();
+                
+                // Trigger custom navigation protocol to communicate with Rust
+                window.location.href = "uid-paste://trigger?" + Date.now();
+            }, true);
+
+            window.addEventListener('keydown', function(e) {
+                if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'v') {
+                    const target = document.activeElement;
+                    if (target && (
+                        target.tagName === 'INPUT' ||
+                        target.tagName === 'TEXTAREA' ||
+                        target.contentEditable === 'true' ||
+                        target.getAttribute('contenteditable') === 'true'
+                    )) {
+                        // Trigger custom scheme to let Rust check clipboard image
+                        window.location.href = "uid-paste://trigger?" + Date.now();
+                    }
+                }
+            }, true);
+        })();
+    "#);
+
+
+    let app_handle_clone = app_handle.clone();
+    let window_id_clone = window_id.clone();
+    window_builder = window_builder.on_navigation(move |url| {
+        if url.scheme() == "uid-paste" {
+            let app_handle = app_handle_clone.clone();
+            let window_id = window_id_clone.clone();
+            tauri::async_runtime::spawn(async move {
+                if let Some(win) = app_handle.get_webview_window(&window_id) {
+                    if let Some(img_bytes) = read_clipboard_image_bytes_helper().await {
+                        use base64::{Engine as _, engine::general_purpose};
+                        let base64_str = general_purpose::STANDARD.encode(&img_bytes);
+                        let js = format!(
+                            "if (window.__tauriPasteImage) {{ window.__tauriPasteImage('data:image/png;base64,{}'); }}",
+                            base64_str
+                        );
+                        let _ = win.eval(&js);
+                    }
+                }
+            });
+            return false;
+        }
+        true
+    });
 
     #[cfg(not(target_os = "macos"))]
     {
@@ -149,6 +275,8 @@ fn launch_sandbox_app(app_id: String, app_name: String, url: String, app_handle:
         }
         Err(e) => Err(e.to_string()),
     }
+
+
 }
 
 // Recursively copy directories helper
@@ -264,7 +392,7 @@ fn get_workspace_app(app_id: &str) -> Option<WorkspaceApp> {
 }
 
 #[tauri::command]
-fn sync_sandbox_profile(app_id: String, _target_url: String, direction: String, app_handle: tauri::AppHandle) -> Result<String, String> {
+async fn sync_sandbox_profile(app_id: String, _target_url: String, direction: String, app_handle: tauri::AppHandle) -> Result<String, String> {
     let local_data = get_agent_data_dir(&app_handle);
     let isolated_dir = local_data.join("apps").join(&app_id);
     
@@ -459,7 +587,7 @@ async fn remediate_screen_lock() -> Result<(), String> {
 
 
 #[tauri::command]
-fn get_posture() -> serde_json::Value {
+async fn get_posture() -> serde_json::Value {
     let p = uid_agent::posture::get_posture();
     json!({
         "os_family": p.os_name,
@@ -475,12 +603,12 @@ fn get_posture() -> serde_json::Value {
 }
 
 #[tauri::command]
-fn get_certificates() -> Vec<serde_json::Value> {
+async fn get_certificates() -> Vec<serde_json::Value> {
     uid_agent::server::get_usb_certificates()
 }
 
 #[tauri::command]
-fn get_signature_history() -> Vec<serde_json::Value> {
+async fn get_signature_history() -> Vec<serde_json::Value> {
     let base_dir = uid_agent::get_uid_data_dir();
     let path = format!("{}/signature_history.json", base_dir);
     if let Ok(content) = std::fs::read_to_string(&path) {
@@ -495,7 +623,7 @@ fn get_signature_history() -> Vec<serde_json::Value> {
 
 
 #[tauri::command]
-fn pin_to_dock(app_id: String) -> Result<String, String> {
+async fn pin_to_dock(app_id: String) -> Result<String, String> {
     let (desktop_filename, _app_name) = if app_id == "agent" {
         ("uid-agent-desktop.desktop".to_string(), "UID Agent".to_string())
     } else {
@@ -749,6 +877,164 @@ async fn check_for_updates() -> Result<String, String> {
     }
 }
 
+const EMBEDDED_VERSION: &str = "1.3.1";
+
+fn parse_store_version(xml: &str) -> Option<String> {
+    if let Some(idx) = xml.find("version=\"") {
+        let start = idx + "version=\"".len();
+        if let Some(end) = xml[start..].find('"') {
+            return Some(xml[start..start + end].to_string());
+        }
+    }
+    None
+}
+
+fn get_installed_chrome_version(browser: &str, extension_id: &str) -> Option<String> {
+    let home = std::env::var("HOME").unwrap_or_else(|_| "/home/s".to_string());
+    
+    let path = if cfg!(target_os = "windows") {
+        let local_app_data = std::env::var("LOCALAPPDATA").unwrap_or_default();
+        let sub_path = if browser == "edge" {
+            "Microsoft\\Edge\\User Data\\Default\\Extensions"
+        } else {
+            "Google\\Chrome\\User Data\\Default\\Extensions"
+        };
+        format!("{}\\{}\\{}", local_app_data, sub_path, extension_id)
+    } else if cfg!(target_os = "macos") {
+        let sub_path = if browser == "edge" {
+            "Library/Application Support/Microsoft Edge/Default/Extensions"
+        } else {
+            "Library/Application Support/Google/Chrome/Default/Extensions"
+        };
+        format!("{}/{}/{}", home, sub_path, extension_id)
+    } else {
+        // Linux
+        let sub_path = if browser == "chromium" {
+            ".config/chromium/Default/Extensions"
+        } else {
+            ".config/google-chrome/Default/Extensions"
+        };
+        format!("{}/{}/{}", home, sub_path, extension_id)
+    };
+
+    let path_buf = std::path::PathBuf::from(path);
+    if path_buf.exists() && path_buf.is_dir() {
+        if let Ok(entries) = std::fs::read_dir(path_buf) {
+            for entry in entries.flatten() {
+                let manifest_path = entry.path().join("manifest.json");
+                if manifest_path.exists() {
+                    if let Ok(content) = std::fs::read_to_string(manifest_path) {
+                        if let Ok(json) = serde_json::from_str::<serde_json::Value>(&content) {
+                            if let Some(version) = json.get("version").and_then(|v| v.as_str()) {
+                                return Some(version.to_string());
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    None
+}
+
+fn is_version_newer(current: &str, incoming: &str) -> bool {
+    let current_parts: Vec<u32> = current.split('.').map(|s| s.parse().unwrap_or(0)).collect();
+    let incoming_parts: Vec<u32> = incoming.split('.').map(|s| s.parse().unwrap_or(0)).collect();
+    
+    for i in 0..std::cmp::max(current_parts.len(), incoming_parts.len()) {
+        let curr = *current_parts.get(i).unwrap_or(&0);
+        let inc = *incoming_parts.get(i).unwrap_or(&0);
+        if inc > curr {
+            return true;
+        } else if curr > inc {
+            return false;
+        }
+    }
+    false
+}
+
+async fn check_store_version(extension_id: &str) -> Option<String> {
+    let url = format!(
+        "https://clients2.google.com/service/update2/crx?x=id%3D{}%26v%3D0.0.0%26uc",
+        extension_id
+    );
+    let client = reqwest::Client::new();
+    if let Ok(response) = client.get(&url).send().await {
+        if let Ok(body) = response.text().await {
+            if body.contains("error-unknownApplication") {
+                return None; // Not on the store
+            }
+            return parse_store_version(&body);
+        }
+    }
+    None
+}
+
+async fn check_github_version() -> Option<String> {
+    let url = "https://api.github.com/repos/oneuid/uid-extension/releases/latest";
+    let client = reqwest::Client::builder()
+        .user_agent("UID-Agent-Desktop/3.0")
+        .build()
+        .ok()?;
+    if let Ok(response) = client.get(url).send().await {
+        if let Ok(json) = response.json::<serde_json::Value>().await {
+            if let Some(tag_name) = json.get("tag_name").and_then(|t| t.as_str()) {
+                return Some(tag_name.trim_start_matches('v').to_string());
+            }
+        }
+    }
+    None
+}
+
+async fn download_file(url: &str, dest_path: &std::path::Path) -> Result<(), String> {
+    let client = reqwest::Client::builder()
+        .user_agent("UID-Agent-Desktop/3.0")
+        .build()
+        .map_err(|e| e.to_string())?;
+    let response = client.get(url).send().await.map_err(|e| e.to_string())?;
+    if !response.status().is_success() {
+        return Err(format!("Download failed with status: {}", response.status()));
+    }
+    let bytes = response.bytes().await.map_err(|e| e.to_string())?;
+    std::fs::write(dest_path, bytes).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+fn extract_zip(zip_path: &std::path::Path, dest_dir: &std::path::Path) -> Result<(), String> {
+    std::fs::create_dir_all(dest_dir).map_err(|e| e.to_string())?;
+    #[cfg(target_os = "windows")]
+    {
+        let cmd = format!(
+            "Expand-Archive -Force -Path '{}' -DestinationPath '{}'",
+            zip_path.to_string_lossy().replace("'", "''"),
+            dest_dir.to_string_lossy().replace("'", "''")
+        );
+        let status = std::process::Command::new("powershell")
+            .args(["-Command", &cmd])
+            .status()
+            .map_err(|e| e.to_string())?;
+        if !status.success() {
+            return Err("Powershell extraction failed".to_string());
+        }
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let status = std::process::Command::new("unzip")
+            .args([
+                "-o",
+                &zip_path.to_string_lossy(),
+                "-d",
+                &dest_dir.to_string_lossy(),
+            ])
+            .status()
+            .map_err(|e| e.to_string())?;
+        if !status.success() {
+            return Err("Unzip command failed".to_string());
+        }
+    }
+    Ok(())
+}
+
 #[tauri::command]
 async fn install_browser_extension(custom_chrome_id: Option<String>) -> Result<String, String> {
     let current_exe = std::env::current_exe()
@@ -795,7 +1081,11 @@ async fn install_browser_extension(custom_chrome_id: Option<String>) -> Result<S
 
     let mut logs = Vec::new();
 
-    // 3. Register Native Messaging Host & Extensions per Platform
+    // Setup Local extension storage directory
+    let local_extensions_dir = std::path::PathBuf::from(&data_dir).join("extensions");
+    let _ = std::fs::create_dir_all(&local_extensions_dir);
+
+    // 3. Register Native Messaging Host per Platform
     #[cfg(target_os = "windows")]
     {
         // Chrome Registry keys
@@ -804,9 +1094,6 @@ async fn install_browser_extension(custom_chrome_id: Option<String>) -> Result<S
             chrome_manifest_path.replace("/", "\\")
         );
         let _ = new_command("cmd").args(["/C", &cmd]).status();
-        
-        let cmd_ext = "reg add \"HKCU\\Software\\Google\\Chrome\\Extensions\\coobgfinhhjocjlhjiaegcfolhdgiinb\" /v update_url /t REG_SZ /d \"https://clients2.google.com/service/update2/crx\" /f";
-        let _ = new_command("cmd").args(["/C", cmd_ext]).status();
 
         // Edge Registry keys
         let cmd_edge = format!(
@@ -814,9 +1101,6 @@ async fn install_browser_extension(custom_chrome_id: Option<String>) -> Result<S
             chrome_manifest_path.replace("/", "\\")
         );
         let _ = new_command("cmd").args(["/C", &cmd_edge]).status();
-        
-        let cmd_edge_ext = "reg add \"HKCU\\Software\\Microsoft\\Edge\\Extensions\\hgoifnbplldplmkkllppgmdofijpfnii\" /v update_url /t REG_SZ /d \"https://clients2.google.com/service/update2/crx\" /f";
-        let _ = new_command("cmd").args(["/C", cmd_edge_ext]).status();
 
         // Firefox Registry keys
         let cmd_ff = format!(
@@ -825,14 +1109,13 @@ async fn install_browser_extension(custom_chrome_id: Option<String>) -> Result<S
         );
         let _ = new_command("cmd").args(["/C", &cmd_ff]).status();
 
-        logs.push("Registered Native Messaging & extensions in Windows Registry for Chrome, Edge, and Firefox.".to_string());
+        logs.push("Registered Native Messaging Host manifest paths in Windows Registry.".to_string());
     }
 
     #[cfg(target_os = "macos")]
     {
         let home = std::env::var("HOME").unwrap_or_default();
         
-        // Native Messaging paths
         let chrome_nm_dir = format!("{}/Library/Application Support/Google/Chrome/NativeMessagingHosts", home);
         let chromium_nm_dir = format!("{}/Library/Application Support/Chromium/NativeMessagingHosts", home);
         let ff_nm_dir = format!("{}/Library/Application Support/Mozilla/NativeMessagingHosts", home);
@@ -846,31 +1129,13 @@ async fn install_browser_extension(custom_chrome_id: Option<String>) -> Result<S
         let _ = std::fs::create_dir_all(&ff_nm_dir);
         let _ = std::fs::copy(&firefox_manifest_path, format!("{}/one.uid.agent.json", ff_nm_dir));
 
-        // External Extensions paths (Chrome)
-        let chrome_ext_dir = format!("{}/Library/Application Support/Google/Chrome/External Extensions", home);
-        if std::fs::create_dir_all(&chrome_ext_dir).is_ok() {
-            let ext_json = serde_json::json!({
-                "external_update_url": "https://clients2.google.com/service/update2/crx"
-            });
-            let _ = std::fs::write(
-                format!("{}/coobgfinhhjocjlhjiaegcfolhdgiinb.json", chrome_ext_dir),
-                serde_json::to_string_pretty(&ext_json).unwrap()
-            );
-        }
-
-        // Open Safari Extensions panel as requested (for Safari support on macOS)
-        let _ = new_command("open")
-            .args(["-b", "com.apple.Safari", "--args", "--show-extension-preferences"])
-            .status();
-
-        logs.push("Copied Native Messaging manifests & configured External Extensions. Triggered Safari Preferences.".to_string());
+        logs.push("Configured Native Messaging Hosts on macOS.".to_string());
     }
 
     #[cfg(target_os = "linux")]
     {
         let home = std::env::var("HOME").unwrap_or_else(|_| "/home/s".to_string());
         
-        // Native Messaging paths
         let chrome_nm_dir = format!("{}/.config/google-chrome/NativeMessagingHosts", home);
         let chromium_nm_dir = format!("{}/.config/chromium/NativeMessagingHosts", home);
         let ff_nm_dir = format!("{}/.mozilla/native-messaging-hosts", home);
@@ -884,24 +1149,160 @@ async fn install_browser_extension(custom_chrome_id: Option<String>) -> Result<S
         let _ = std::fs::create_dir_all(&ff_nm_dir);
         let _ = std::fs::copy(&firefox_manifest_path, format!("{}/one.uid.agent.json", ff_nm_dir));
 
-        // External Extensions paths (Chrome)
-        let chrome_ext_dir = format!("{}/.config/google-chrome/External Extensions", home);
-        if std::fs::create_dir_all(&chrome_ext_dir).is_ok() {
-            let ext_json = serde_json::json!({
-                "external_update_url": "https://clients2.google.com/service/update2/crx"
-            });
-            let _ = std::fs::write(
-                format!("{}/coobgfinhhjocjlhjiaegcfolhdgiinb.json", chrome_ext_dir),
-                serde_json::to_string_pretty(&ext_json).unwrap()
-            );
-        }
-
-        logs.push("Registered Native Messaging hosts & External Extensions on Linux.".to_string());
+        logs.push("Configured Native Messaging Hosts on Linux.".to_string());
     }
 
-    // 4. Firefox profile .xpi injection
+    // 4. Chrome / Edge Extension Install and Version Sync
+    let chrome_id = "coobgfinhhjocjlhjiaegcfolhdgiinb";
+    let edge_id = "hgoifnbplldplmkkllppgmdofijpfnii";
+
+    let chrome_inst_ver = get_installed_chrome_version("chrome", chrome_id);
+    let edge_inst_ver = get_installed_chrome_version("edge", edge_id);
+
+    logs.push(format!("Current Installed Version: Chrome [{}], Edge [{}]", 
+        chrome_inst_ver.as_deref().unwrap_or("None"), 
+        edge_inst_ver.as_deref().unwrap_or("None")));
+
+    // Check Chrome Web Store
+    let store_chrome_ver = check_store_version(chrome_id).await;
+    let store_edge_ver = check_store_version(edge_id).await;
+
+    let use_chrome_store = store_chrome_ver.is_some();
+    let use_edge_store = store_edge_ver.is_some();
+
+    // Chrome flow
+    if use_chrome_store {
+        let store_ver = store_chrome_ver.unwrap();
+        logs.push(format!("Chrome extension found on Web Store (Version: {}).", store_ver));
+        #[cfg(target_os = "windows")]
+        {
+            let cmd_ext = format!("reg add \"HKCU\\Software\\Google\\Chrome\\Extensions\\{}\" /v update_url /t REG_SZ /d \"https://clients2.google.com/service/update2/crx\" /f", chrome_id);
+            let _ = new_command("cmd").args(["/C", &cmd_ext]).status();
+        }
+        #[cfg(target_os = "macos")]
+        {
+            let home = std::env::var("HOME").unwrap_or_default();
+            let chrome_ext_dir = format!("{}/Library/Application Support/Google/Chrome/External Extensions", home);
+            if std::fs::create_dir_all(&chrome_ext_dir).is_ok() {
+                let ext_json = serde_json::json!({
+                    "external_update_url": "https://clients2.google.com/service/update2/crx"
+                });
+                let _ = std::fs::write(format!("{}/{}.json", chrome_ext_dir, chrome_id), serde_json::to_string_pretty(&ext_json).unwrap());
+            }
+        }
+        #[cfg(target_os = "linux")]
+        {
+            let home = std::env::var("HOME").unwrap_or_else(|_| "/home/s".to_string());
+            let chrome_ext_dir = format!("{}/.config/google-chrome/External Extensions", home);
+            if std::fs::create_dir_all(&chrome_ext_dir).is_ok() {
+                let ext_json = serde_json::json!({
+                    "external_update_url": "https://clients2.google.com/service/update2/crx"
+                });
+                let _ = std::fs::write(format!("{}/{}.json", chrome_ext_dir, chrome_id), serde_json::to_string_pretty(&ext_json).unwrap());
+            }
+        }
+        logs.push("Configured Chrome to download and update extension from Web Store.".to_string());
+    } else {
+        logs.push("Chrome extension not available on Web Store. Initiating Offline / GitHub deployment.".to_string());
+        let github_ver = check_github_version().await.unwrap_or_else(|| EMBEDDED_VERSION.to_string());
+        let current_installed = chrome_inst_ver.clone().unwrap_or_else(|| "0.0.0".to_string());
+        
+        let target_dir = local_extensions_dir.join(chrome_id);
+        let zip_path = local_extensions_dir.join("chrome-extension.zip");
+
+        if is_version_newer(&current_installed, &github_ver) || !target_dir.exists() {
+            logs.push(format!("Upgrading Chrome Extension from v{} to v{}", current_installed, github_ver));
+            let mut download_success = false;
+            let github_download_url = format!("https://github.com/oneuid/uid-extension/releases/download/v{}/uid-link-firefox.zip", github_ver);
+            if download_file(&github_download_url, &zip_path).await.is_ok() {
+                download_success = true;
+            }
+
+            if !download_success {
+                logs.push("GitHub download unavailable. Packaging local embedded extension resource.".to_string());
+                let local_zip_bytes = include_bytes!("../resources/uid-link-firefox.zip");
+                let _ = std::fs::write(&zip_path, local_zip_bytes);
+            }
+
+            let _ = std::fs::remove_dir_all(&target_dir);
+            if extract_zip(&zip_path, &target_dir).is_ok() {
+                logs.push(format!("Chrome Extension unpacked successfully at: {}", target_dir.to_string_lossy()));
+            }
+            let _ = std::fs::remove_file(&zip_path);
+        }
+
+        #[cfg(not(target_os = "windows"))]
+        {
+            let home = std::env::var("HOME").unwrap_or_default();
+            let chrome_ext_dir = if cfg!(target_os = "macos") {
+                format!("{}/Library/Application Support/Google/Chrome/External Extensions", home)
+            } else {
+                format!("{}/.config/google-chrome/External Extensions", home)
+            };
+            if std::fs::create_dir_all(&chrome_ext_dir).is_ok() {
+                let ext_json = serde_json::json!({
+                    "external_dir": target_dir.to_string_lossy(),
+                    "external_version": github_ver
+                });
+                let _ = std::fs::write(format!("{}/{}.json", chrome_ext_dir, chrome_id), serde_json::to_string_pretty(&ext_json).unwrap());
+                logs.push("Configured Chrome to load local unpacked extension.".to_string());
+            }
+        }
+        #[cfg(target_os = "windows")]
+        {
+            let cmd_ext = format!("reg add \"HKCU\\Software\\Google\\Chrome\\Extensions\\{}\" /v path /t REG_SZ /d \"{}\" /f", chrome_id, target_dir.to_string_lossy().replace("/", "\\"));
+            let _ = new_command("cmd").args(["/C", &cmd_ext]).status();
+            let cmd_ext_v = format!("reg add \"HKCU\\Software\\Google\\Chrome\\Extensions\\{}\" /v version /t REG_SZ /d \"{}\" /f", chrome_id, github_ver);
+            let _ = new_command("cmd").args(["/C", &cmd_ext_v]).status();
+            logs.push("Saved local unpacked path to Registry. Please verify Developer Mode is ON in Chrome/Edge if the extension does not appear.".to_string());
+        }
+    }
+
+    // Edge flow (similar to Chrome)
+    if use_edge_store {
+        let store_ver = store_edge_ver.unwrap();
+        logs.push(format!("Edge extension found on Microsoft Add-ons Store (Version: {}).", store_ver));
+        #[cfg(target_os = "windows")]
+        {
+            let cmd_edge_ext = format!("reg add \"HKCU\\Software\\Microsoft\\Edge\\Extensions\\{}\" /v update_url /t REG_SZ /d \"https://clients2.google.com/service/update2/crx\" /f", edge_id);
+            let _ = new_command("cmd").args(["/C", &cmd_edge_ext]).status();
+        }
+        logs.push("Configured Edge to download/update from Microsoft Web Store.".to_string());
+    } else {
+        logs.push("Edge extension not available on store. Using side-loaded fallback.".to_string());
+        let target_dir = local_extensions_dir.join(edge_id);
+        let zip_path = local_extensions_dir.join("edge-extension.zip");
+        let github_ver = check_github_version().await.unwrap_or_else(|| EMBEDDED_VERSION.to_string());
+        let current_installed = edge_inst_ver.unwrap_or_else(|| "0.0.0".to_string());
+
+        if is_version_newer(&current_installed, &github_ver) || !target_dir.exists() {
+            let mut download_success = false;
+            let github_download_url = format!("https://github.com/oneuid/uid-extension/releases/download/v{}/uid-link-firefox.zip", github_ver);
+            if download_file(&github_download_url, &zip_path).await.is_ok() {
+                download_success = true;
+            }
+            if !download_success {
+                let local_zip_bytes = include_bytes!("../resources/uid-link-firefox.zip");
+                let _ = std::fs::write(&zip_path, local_zip_bytes);
+            }
+            let _ = std::fs::remove_dir_all(&target_dir);
+            if extract_zip(&zip_path, &target_dir).is_ok() {
+                logs.push(format!("Edge Extension unpacked successfully."));
+            }
+            let _ = std::fs::remove_file(&zip_path);
+        }
+
+        #[cfg(target_os = "windows")]
+        {
+            let cmd_edge_ext = format!("reg add \"HKCU\\Software\\Microsoft\\Edge\\Extensions\\{}\" /v path /t REG_SZ /d \"{}\" /f", edge_id, target_dir.to_string_lossy().replace("/", "\\"));
+            let _ = new_command("cmd").args(["/C", &cmd_edge_ext]).status();
+            let cmd_edge_v = format!("reg add \"HKCU\\Software\\Microsoft\\Edge\\Extensions\\{}\" /v version /t REG_SZ /d \"{}\" /f", edge_id, github_ver);
+            let _ = new_command("cmd").args(["/C", &cmd_edge_v]).status();
+        }
+    }
+
+    // 5. Firefox Extension Injection
     let firefox_zip_bytes = include_bytes!("../resources/uid-link-firefox.zip");
-    
     let ff_profiles_dir = if cfg!(target_os = "windows") {
         std::env::var("APPDATA").map(|d| format!("{}/Mozilla/Firefox/Profiles", d)).ok()
     } else if cfg!(target_os = "macos") {
@@ -918,18 +1319,33 @@ async fn install_browser_extension(custom_chrome_id: Option<String>) -> Result<S
                 let path = entry.path();
                 if path.is_dir() {
                     let folder_name = path.file_name().unwrap_or_default().to_string_lossy();
-                    // Firefox profiles normally end with default, default-release, or dev-edition
                     if folder_name.contains("default") || folder_name.contains("release") || folder_name.contains("dev-edition") {
                         let ext_folder = path.join("extensions");
                         let _ = std::fs::create_dir_all(&ext_folder);
                         let dest_xpi = ext_folder.join("passkey@uid.one.xpi");
-                        if std::fs::write(&dest_xpi, firefox_zip_bytes).is_ok() {
-                            logs.push(format!("Injected passkey@uid.one.xpi into Firefox profile: {}", folder_name));
+                        
+                        let needs_firefox_update = if dest_xpi.exists() {
+                            true
+                        } else {
+                            true
+                        };
+
+                        if needs_firefox_update {
+                            if std::fs::write(&dest_xpi, firefox_zip_bytes).is_ok() {
+                                logs.push(format!("Firefox: Synchronized passkey@uid.one.xpi (v{}) into profile: {}", EMBEDDED_VERSION, folder_name));
+                            }
                         }
                     }
                 }
             }
         }
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        let _ = new_command("open")
+            .args(["-b", "com.apple.Safari", "--args", "--show-extension-preferences"])
+            .status();
     }
 
     Ok(logs.join("\n"))
@@ -999,6 +1415,7 @@ pub fn run() {
                 }
                 std::process::exit(0);
             }
+
 
             // Start loopback TCP socket single-instance listener on port 13014 for the first running process
             let app_handle_ipc = app.handle().clone();
@@ -1126,6 +1543,7 @@ pub fn run() {
             get_user_profile,
             logout_user,
             open_browser_url,
+            show_notification,
             launch_sandbox_app,
             sync_sandbox_profile,
             remediate_firewall,
@@ -1137,3 +1555,72 @@ pub fn run() {
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
+
+async fn read_clipboard_image_bytes_helper() -> Option<Vec<u8>> {
+    #[cfg(target_os = "linux")]
+    {
+        // Try wl-paste (Wayland)
+        if let Ok(output) = std::process::Command::new("wl-paste")
+            .args(["-t", "image/png"])
+            .output()
+        {
+            if output.status.success() && !output.stdout.is_empty() {
+                return Some(output.stdout);
+            }
+        }
+        // Try xclip (X11)
+        if let Ok(output) = std::process::Command::new("xclip")
+            .args(["-selection", "clipboard", "-t", "image/png", "-o"])
+            .output()
+        {
+            if output.status.success() && !output.stdout.is_empty() {
+                return Some(output.stdout);
+            }
+        }
+    }
+    #[cfg(target_os = "windows")]
+    {
+        let ps_cmd = "[void] [System.Reflection.Assembly]::LoadWithPartialName('System.Windows.Forms'); \
+                      if ([System.Windows.Forms.Clipboard]::ContainsImage()) { \
+                          $ms = New-Object System.IO.MemoryStream; \
+                          [System.Windows.Forms.Clipboard]::GetImage().Save($ms, [System.Drawing.Imaging.ImageFormat]::Png); \
+                          [System.Console]::OpenStandardOutput().Write($ms.ToArray(), 0, $ms.Length); \
+                      }";
+        if let Ok(output) = std::process::Command::new("powershell")
+            .args(["-NoProfile", "-Command", ps_cmd])
+            .output()
+        {
+            if output.status.success() && !output.stdout.is_empty() {
+                return Some(output.stdout);
+            }
+        }
+    }
+    #[cfg(target_os = "macos")]
+    {
+        let script = "get the clipboard as «class PNGf»";
+        if let Ok(output) = std::process::Command::new("osascript")
+            .args(["-e", script])
+            .output()
+        {
+            if output.status.success() {
+                let stdout_str = String::from_utf8_lossy(&output.stdout).trim().to_string();
+                if stdout_str.starts_with("«data PNGf") && stdout_str.ends_with("»") {
+                    let hex_content = stdout_str
+                        .trim_start_matches("«data PNGf")
+                        .trim_end_matches('»');
+                    let decode_hex = |s: &str| -> Option<Vec<u8>> {
+                        (0..s.len())
+                            .step_by(2)
+                            .map(|i| u8::from_str_radix(&s[i..i + 2], 16).ok())
+                            .collect()
+                    };
+                    if let Some(bytes) = decode_hex(hex_content) {
+                        return Some(bytes);
+                    }
+                }
+            }
+        }
+    }
+    None
+}
+

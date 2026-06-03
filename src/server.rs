@@ -799,13 +799,30 @@ async fn handle_connection(mut stream: TcpStream, keys: Arc<AgentKeys>) -> Resul
         }
     }
 
+    let allow_origin = if !origin.is_empty() {
+        origin.clone()
+    } else {
+        "*".to_string()
+    };
+    let cors_headers = format!(
+        "Access-Control-Allow-Origin: {}\r\n\
+         Access-Control-Allow-Credentials: true\r\n\
+         Access-Control-Allow-Private-Network: true\r\n",
+        allow_origin
+    );
+
     if method == "OPTIONS" {
-        let response = "HTTP/1.1 200 OK\r\n\
-                        Access-Control-Allow-Origin: *\r\n\
-                        Access-Control-Allow-Methods: GET, POST, OPTIONS\r\n\
-                        Access-Control-Allow-Headers: Content-Type, Accept, Authorization\r\n\
-                        Content-Length: 0\r\n\
-                        Connection: close\r\n\r\n";
+        let response = format!(
+            "HTTP/1.1 200 OK\r\n\
+             Access-Control-Allow-Origin: {}\r\n\
+             Access-Control-Allow-Methods: GET, POST, OPTIONS\r\n\
+             Access-Control-Allow-Headers: Content-Type, Accept, Authorization, Access-Control-Allow-Private-Network\r\n\
+             Access-Control-Allow-Credentials: true\r\n\
+             Access-Control-Allow-Private-Network: true\r\n\
+             Content-Length: 0\r\n\
+             Connection: close\r\n\r\n",
+            allow_origin
+        );
         stream.write_all(response.as_bytes()).await?;
         return Ok(());
     }
@@ -815,10 +832,11 @@ async fn handle_connection(mut stream: TcpStream, keys: Arc<AgentKeys>) -> Resul
         let body = serde_json::to_string(&posture_data).unwrap_or_default();
         let response = format!(
             "HTTP/1.1 200 OK\r\n\
-             Access-Control-Allow-Origin: *\r\n\
+             {}\
              Content-Type: application/json\r\n\
              Content-Length: {}\r\n\
              Connection: close\r\n\r\n{}",
+            cors_headers,
             body.len(),
             body
         );
@@ -957,10 +975,11 @@ async fn handle_connection(mut stream: TcpStream, keys: Arc<AgentKeys>) -> Resul
             let res_body = json!({ "success": true }).to_string();
             let response = format!(
                 "HTTP/1.1 200 OK\r\n\
-                 Access-Control-Allow-Origin: *\r\n\
+                 {}\
                  Content-Type: application/json\r\n\
                  Content-Length: {}\r\n\
                  Connection: close\r\n\r\n{}",
+                cors_headers,
                 res_body.len(),
                 res_body
             );
@@ -971,10 +990,11 @@ async fn handle_connection(mut stream: TcpStream, keys: Arc<AgentKeys>) -> Resul
         let res_body = json!({ "success": false, "error": "Invalid payload" }).to_string();
         let response = format!(
             "HTTP/1.1 400 Bad Request\r\n\
-             Access-Control-Allow-Origin: *\r\n\
+             {}\
              Content-Type: application/json\r\n\
              Content-Length: {}\r\n\
              Connection: close\r\n\r\n{}",
+            cors_headers,
             res_body.len(),
             res_body
         );
@@ -990,10 +1010,11 @@ async fn handle_connection(mut stream: TcpStream, keys: Arc<AgentKeys>) -> Resul
         let res_body = json!({ "success": true }).to_string();
         let response = format!(
             "HTTP/1.1 200 OK\r\n\
-             Access-Control-Allow-Origin: *\r\n\
+             {}\
              Content-Type: application/json\r\n\
              Content-Length: {}\r\n\
              Connection: close\r\n\r\n{}",
+            cors_headers,
             res_body.len(),
             res_body
         );
@@ -1017,16 +1038,50 @@ async fn handle_connection(mut stream: TcpStream, keys: Arc<AgentKeys>) -> Resul
 
         let response = format!(
             "HTTP/1.1 200 OK\r\n\
-             Access-Control-Allow-Origin: *\r\n\
+             {}\
              Content-Type: application/json\r\n\
              Content-Length: {}\r\n\
              Connection: close\r\n\r\n{}",
+            cors_headers,
             body.len(),
             body
         );
         stream.write_all(response.as_bytes()).await?;
         return Ok(());
     }
+
+    if method == "GET" && path == "/clipboard/latest" {
+        if let Some(img_bytes) = read_clipboard_image() {
+            let response = format!(
+                "HTTP/1.1 200 OK\r\n\
+                 {}\
+                 Content-Type: image/png\r\n\
+                 Content-Length: {}\r\n\
+                 Connection: close\r\n\r\n",
+                cors_headers,
+                img_bytes.len()
+            );
+            let mut full_response = response.into_bytes();
+            full_response.extend_from_slice(&img_bytes);
+            stream.write_all(&full_response).await?;
+            return Ok(());
+        }
+
+        let body = json!({ "error": "No image in clipboard" }).to_string();
+        let response = format!(
+            "HTTP/1.1 204 No Content\r\n\
+             {}\
+             Content-Type: application/json\r\n\
+             Content-Length: {}\r\n\
+             Connection: close\r\n\r\n{}",
+            cors_headers,
+            body.len(),
+            body
+        );
+        stream.write_all(response.as_bytes()).await?;
+        return Ok(());
+    }
+
 
     if method == "GET" && (path == "/history" || path == "/signature-history" || path == "/signature_history") {
         let history = read_signature_history();
@@ -1813,4 +1868,76 @@ fn format_timestamp_iso8601(epoch_secs: u64) -> String {
 
     format!("{:04}-{:02}-{:02}T{:02}:{:02}:{:02}Z", year, month, day, hour, minute, second)
 }
+
+#[allow(dead_code)]
+fn decode_hex(s: &str) -> Result<Vec<u8>, std::num::ParseIntError> {
+    (0..s.len())
+        .step_by(2)
+        .map(|i| u8::from_str_radix(&s[i..i + 2], 16))
+        .collect()
+}
+
+fn read_clipboard_image() -> Option<Vec<u8>> {
+    #[cfg(target_os = "linux")]
+    {
+        // Try wl-paste
+        if let Ok(output) = new_command("wl-paste")
+            .args(["-t", "image/png"])
+            .output()
+        {
+            if output.status.success() && !output.stdout.is_empty() {
+                return Some(output.stdout);
+            }
+        }
+        // Try xclip
+        if let Ok(output) = new_command("xclip")
+            .args(["-selection", "clipboard", "-t", "image/png", "-o"])
+            .output()
+        {
+            if output.status.success() && !output.stdout.is_empty() {
+                return Some(output.stdout);
+            }
+        }
+    }
+    #[cfg(target_os = "windows")]
+    {
+        // PowerShell command to export clipboard image to stdout
+        let ps_cmd = "[void] [System.Reflection.Assembly]::LoadWithPartialName('System.Windows.Forms'); \
+                      if ([System.Windows.Forms.Clipboard]::ContainsImage()) { \
+                          $ms = New-Object System.IO.MemoryStream; \
+                          [System.Windows.Forms.Clipboard]::GetImage().Save($ms, [System.Drawing.Imaging.ImageFormat]::Png); \
+                          [System.Console]::OpenStandardOutput().Write($ms.ToArray(), 0, $ms.Length); \
+                      }";
+        if let Ok(output) = new_command("powershell")
+            .args(["-NoProfile", "-Command", ps_cmd])
+            .output()
+        {
+            if output.status.success() && !output.stdout.is_empty() {
+                return Some(output.stdout);
+            }
+        }
+    }
+    #[cfg(target_os = "macos")]
+    {
+        let script = "get the clipboard as «class PNGf»";
+        if let Ok(output) = new_command("osascript")
+            .args(["-e", script])
+            .output()
+        {
+            if output.status.success() {
+                let stdout_str = String::from_utf8_lossy(&output.stdout).trim().to_string();
+                if stdout_str.starts_with("«data PNGf") && stdout_str.ends_with("»") {
+                    let hex_content = stdout_str
+                        .trim_start_matches("«data PNGf")
+                        .trim_end_matches('»');
+                    if let Ok(bytes) = decode_hex(hex_content) {
+                        return Some(bytes);
+                    }
+                }
+            }
+        }
+    }
+    None
+}
+
 
