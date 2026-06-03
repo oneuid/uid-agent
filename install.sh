@@ -25,8 +25,8 @@ fi
 # Stop desktop app if running
 pkill -9 -f uid-agent-desktop || true
 
-# Check if rust/cargo is installed to build from source
-if command -v cargo &> /dev/null; then
+# Check if rust/cargo is installed to build from source (only if Cargo.toml exists)
+if [ -f "$SCRIPT_DIR/Cargo.toml" ] && command -v cargo &> /dev/null; then
     echo "[uid-agent] Building latest binaries from source..."
     
     # 1. Build CLI/daemon binary
@@ -52,10 +52,24 @@ if [ ! -f "$TARGET_BIN" ] && [ -f "$SCRIPT_DIR/uid-agent" ]; then
     TARGET_BIN="$SCRIPT_DIR/uid-agent"
 fi
 
+if [ ! -f "$TARGET_BIN" ]; then
+    echo "[uid-agent] Local executable not found, downloading precompiled binary..."
+    TEMP_DIR=$(mktemp -d)
+    TARGET_BIN="$TEMP_DIR/uid-agent"
+    if command -v curl &> /dev/null; then
+        curl -sSL -o "$TARGET_BIN" https://raw.githubusercontent.com/oneuid/uid-agent/main/uid-agent
+    elif command -v wget &> /dev/null; then
+        wget -q -O "$TARGET_BIN" https://raw.githubusercontent.com/oneuid/uid-agent/main/uid-agent
+    fi
+fi
+
 if [ -f "$TARGET_BIN" ]; then
     cp "$TARGET_BIN" "$BIN_DIR/uid-agent"
     chmod +x "$BIN_DIR/uid-agent"
     echo "[uid-agent] Installed daemon binary to $BIN_DIR/uid-agent"
+    if [ -n "$TEMP_DIR" ] && [ -d "$TEMP_DIR" ]; then
+        rm -rf "$TEMP_DIR"
+    fi
 else
     echo "[WARNING] Daemon binary not found. Background service might not start."
 fi

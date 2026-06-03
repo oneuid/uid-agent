@@ -79,6 +79,255 @@ fn open_browser_url(url: String) -> Result<(), String> {
 }
 
 #[tauri::command]
+fn launch_sandbox_app(app_id: String, app_name: String, url: String, app_handle: tauri::AppHandle) -> Result<(), String> {
+    let window_id = format!("sandbox_{}", app_id);
+    let title = format!("UID Sandbox - {} (Isolated Data)", app_name);
+    
+    // Check if the window is already open. If so, focus it.
+    if let Some(existing_window) = app_handle.get_webview_window(&window_id) {
+        let _ = existing_window.show();
+        let _ = existing_window.set_focus();
+        return Ok(());
+    }
+
+    // Determine isolated path
+    let local_data = get_agent_data_dir(&app_handle);
+    let _ = std::fs::create_dir_all(&local_data);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if let Ok(meta) = std::fs::metadata(&local_data) {
+            let mut perms = meta.permissions();
+            perms.set_mode(0o700);
+            let _ = std::fs::set_permissions(&local_data, perms);
+        }
+    }
+
+    let isolated_dir = local_data.join("apps").join(&app_id);
+    let _ = std::fs::create_dir_all(&isolated_dir);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if let Ok(meta) = std::fs::metadata(&isolated_dir) {
+            let mut perms = meta.permissions();
+            perms.set_mode(0o700);
+            let _ = std::fs::set_permissions(&isolated_dir, perms);
+        }
+    }
+
+    // Create a new window showing the target service URL
+    let mut window_builder = tauri::WebviewWindowBuilder::new(
+        &app_handle,
+        &window_id,
+        tauri::WebviewUrl::External(url.parse().map_err(|e| format!("Invalid URL: {}", e))?)
+    )
+    .title(title)
+    .inner_size(1024.0, 768.0)
+    .resizable(true);
+
+    #[cfg(not(target_os = "macos"))]
+    {
+        window_builder = window_builder.data_directory(isolated_dir);
+    }
+    #[cfg(target_os = "macos")]
+    {
+        let mut key = [0u8; 16];
+        let bytes = app_id.as_bytes();
+        for (i, b) in bytes.iter().enumerate() {
+            if i < 16 {
+                key[i] = *b;
+            }
+        }
+        window_builder = window_builder.data_store_identifier(key);
+    }
+
+    match window_builder.build() {
+        Ok(win) => {
+            let _ = win.show();
+            let _ = win.set_focus();
+            Ok(())
+        }
+        Err(e) => Err(e.to_string()),
+    }
+}
+
+// Recursively copy directories helper
+fn copy_dir_all(src: &std::path::Path, dst: &std::path::Path) -> std::io::Result<()> {
+    std::fs::create_dir_all(dst)?;
+    for entry in std::fs::read_dir(src)? {
+        let entry = entry?;
+        let ty = entry.file_type()?;
+        if ty.is_dir() {
+            copy_dir_all(&entry.path(), &dst.join(entry.file_name()))?;
+        } else {
+            std::fs::copy(entry.path(), dst.join(entry.file_name()))?;
+        }
+    }
+    Ok(())
+}
+
+fn get_agent_data_dir(app_handle: &tauri::AppHandle) -> std::path::PathBuf {
+    if let Ok(env_val) = std::env::var("UID_AGENT_DATA_DIR") {
+        let path = std::path::PathBuf::from(env_val);
+        if std::fs::create_dir_all(&path).is_ok() {
+            return path;
+        }
+    }
+    if let Ok(local_dir) = app_handle.path().app_local_data_dir() {
+        if std::fs::create_dir_all(&local_dir).is_ok() {
+            return local_dir;
+        }
+    }
+    let home = get_home_dir();
+    let fallback = std::path::PathBuf::from(home).join(".uid-agent");
+    let _ = std::fs::create_dir_all(&fallback);
+    fallback
+}
+
+fn detect_chrome_profile() -> Option<std::path::PathBuf> {
+    let home = get_home_dir();
+    let home_path = std::path::PathBuf::from(&home);
+
+    #[cfg(target_os = "windows")]
+    {
+        if let Ok(local_appdata) = std::env::var("LOCALAPPDATA") {
+            let path = std::path::PathBuf::from(local_appdata)
+                .join("Google")
+                .join("Chrome")
+                .join("User Data")
+                .join("Default");
+            if path.exists() {
+                return Some(path);
+            }
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        let path = home_path
+            .join("Library")
+            .join("Application Support")
+            .join("Google")
+            .join("Chrome")
+            .join("Default");
+        if path.exists() {
+            return Some(path);
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        let standard_path = home_path.join(".config").join("google-chrome").join("Default");
+        if standard_path.exists() {
+            return Some(standard_path);
+        }
+        let flatpak_path = home_path
+            .join(".var")
+            .join("app")
+            .join("com.google.Chrome")
+            .join("config")
+            .join("google-chrome")
+            .join("Default");
+        if flatpak_path.exists() {
+            return Some(flatpak_path);
+        }
+        let chromium_path = home_path.join(".config").join("chromium").join("Default");
+        if chromium_path.exists() {
+            return Some(chromium_path);
+        }
+    }
+
+    None
+}
+
+struct WorkspaceApp {
+    name: &'static str,
+    url: &'static str,
+}
+
+fn get_workspace_app(app_id: &str) -> Option<WorkspaceApp> {
+    match app_id {
+        "zalo" => Some(WorkspaceApp {
+            name: "Zalo Messenger",
+            url: "https://chat.zalo.me/",
+        }),
+        "misa" => Some(WorkspaceApp {
+            name: "MISA Accounting",
+            url: "https://act.misa.vn/",
+        }),
+        "acrobat" => Some(WorkspaceApp {
+            name: "Acrobat PDF Signer",
+            url: "https://acrobat.adobe.com/link/acrobat/signatures",
+        }),
+        _ => None,
+    }
+}
+
+#[tauri::command]
+fn sync_sandbox_profile(app_id: String, _target_url: String, direction: String, app_handle: tauri::AppHandle) -> Result<String, String> {
+    let local_data = get_agent_data_dir(&app_handle);
+    let isolated_dir = local_data.join("apps").join(&app_id);
+    
+    if direction == "import" {
+        let chrome_profile = detect_chrome_profile()
+            .ok_or_else(|| "Google Chrome or Chromium profile directory not found on this system.".to_string())?;
+        
+        let _ = std::fs::create_dir_all(&isolated_dir);
+        let mut files_copied = 0;
+        
+        // 1. Sync Cookies
+        let chrome_cookies = chrome_profile.join("Network").join("Cookies");
+        if chrome_cookies.exists() {
+            let dest = isolated_dir.join("Cookies");
+            if std::fs::copy(&chrome_cookies, &dest).is_ok() {
+                files_copied += 1;
+            }
+        }
+        
+        // 2. Sync Local Storage
+        let chrome_localstorage = chrome_profile.join("Local Storage");
+        if chrome_localstorage.exists() {
+            let dest = isolated_dir.join("Local Storage");
+            let _ = copy_dir_all(&chrome_localstorage, &dest);
+            files_copied += 1;
+        }
+
+        // 3. Sync IndexedDB
+        let chrome_indexeddb = chrome_profile.join("IndexedDB");
+        if chrome_indexeddb.exists() {
+            let dest = isolated_dir.join("IndexedDB");
+            let _ = copy_dir_all(&chrome_indexeddb, &dest);
+            files_copied += 1;
+        }
+
+        if files_copied > 0 {
+            Ok(format!("Successfully imported {} profile datasets from Chrome", files_copied))
+        } else {
+            Err("No compatible session files found in Chrome profile to import.".to_string())
+        }
+    } else if direction == "restore" {
+        let backup_dir = local_data.join("backups").join(format!("{}_profile_backup", app_id));
+        if !backup_dir.exists() {
+            return Err("No backup found to restore.".to_string());
+        }
+        let _ = std::fs::remove_dir_all(&isolated_dir);
+        let _ = std::fs::create_dir_all(&isolated_dir);
+        copy_dir_all(&backup_dir, &isolated_dir)
+            .map_err(|e| format!("Restore failed: {}", e))?;
+        Ok("Successfully restored profile from backup!".to_string())
+    } else {
+        // Export profile to backup folder
+        let backup_dir = local_data.join("backups");
+        let _ = std::fs::create_dir_all(&backup_dir);
+        let dest = backup_dir.join(format!("{}_profile_backup", app_id));
+        let _ = std::fs::remove_dir_all(&dest);
+        copy_dir_all(&isolated_dir, &dest).map_err(|e| format!("Export failed: {}", e))?;
+        Ok(format!("Successfully exported profile to: {}", dest.to_string_lossy()))
+    }
+}
+
+
+#[tauri::command]
 async fn remediate_firewall() -> Result<(), String> {
     #[cfg(target_os = "linux")]
     {
@@ -247,10 +496,131 @@ fn get_signature_history() -> Vec<serde_json::Value> {
 
 #[tauri::command]
 fn pin_to_dock(app_id: String) -> Result<String, String> {
-    if app_id != "agent" {
-        return Err("Unsupported app".to_string());
-    }
-    let desktop_filename = "uid-agent-desktop.desktop".to_string();
+    let (desktop_filename, _app_name) = if app_id == "agent" {
+        ("uid-agent-desktop.desktop".to_string(), "UID Agent".to_string())
+    } else {
+        let filename = format!("uid-agent-app-{}.desktop", app_id);
+        let app_name = match app_id.as_str() {
+            "zalo" => "Zalo Messenger",
+            "misa" => "MISA Accounting",
+            "acrobat" => "Acrobat PDF Signer",
+            _ => "Secure Workspace",
+        };
+
+        if let Ok(exe_path) = std::env::current_exe() {
+            let home = get_home_dir();
+            let desktop_dir = format!("{}/.local/share/applications", home);
+            let _ = std::fs::create_dir_all(&desktop_dir);
+
+            let exe_path_str = exe_path.to_string_lossy();
+
+            let icon_file = match app_id.as_str() {
+                "zalo" => "uid-agent-app-zalo.png",
+                "misa" => "uid-agent-app-misa.ico",
+                "acrobat" => "uid-agent-app-acrobat.ico",
+                _ => "uid-agent-app-default.png",
+            };
+
+            let icon_path = format!("{}/.local/share/icons/{}", home, icon_file);
+            let icon_dir = format!("{}/.local/share/icons", home);
+            let _ = std::fs::create_dir_all(&icon_dir);
+
+            if !std::path::Path::new(&icon_path).exists() {
+                match app_id.as_str() {
+                    "zalo" => {
+                        let _ = std::process::Command::new("curl")
+                            .arg("-L")
+                            .arg("-o")
+                            .arg(&icon_path)
+                            .arg("https://stc-chat.zdn.vn/images/logo.png")
+                            .status();
+                    }
+                    "misa" => {
+                        let _ = std::process::Command::new("curl")
+                            .arg("-L")
+                            .arg("-o")
+                            .arg(&icon_path)
+                            .arg("https://amisapp.misa.vn/favicon.ico")
+                            .status();
+                    }
+                    "acrobat" => {
+                        let _ = std::process::Command::new("curl")
+                            .arg("-L")
+                            .arg("-o")
+                            .arg(&icon_path)
+                            .arg("https://www.adobe.com/favicon.ico")
+                            .status();
+                    }
+                    _ => {
+                        let default_agent_icon = format!("{}/.local/share/icons/uid-agent-desktop.png", home);
+                        let _ = std::fs::copy(default_agent_icon, &icon_path);
+                    }
+                }
+            }
+
+            let desktop_content = match app_id.as_str() {
+                "zalo" => format!(
+                    "[Desktop Entry]\n\
+                     Type=Application\n\
+                     Name=Zalo Messenger (Workspace)\n\
+                     Name[vi]=Zalo Messenger (Không gian làm việc)\n\
+                     Exec=\"{}\" --launch-app zalo\n\
+                     Icon={}\n\
+                     Terminal=false\n\
+                     Categories=Network;Chat;\n\
+                     Comment=Isolated Secure Workspace for Zalo Messenger\n\
+                     Comment[vi]=Không gian làm việc bảo mật cô lập cho Zalo Messenger\n",
+                    exe_path_str, icon_path
+                ),
+                "misa" => format!(
+                    "[Desktop Entry]\n\
+                     Type=Application\n\
+                     Name=MISA Accounting (Workspace)\n\
+                     Name[vi]=MISA Accounting (Không gian làm việc)\n\
+                     Exec=\"{}\" --launch-app misa\n\
+                     Icon={}\n\
+                     Terminal=false\n\
+                     Categories=Office;Finance;\n\
+                     Comment=Isolated Secure Workspace for MISA Accounting\n\
+                     Comment[vi]=Không gian làm việc bảo mật cô lập cho MISA Accounting\n",
+                    exe_path_str, icon_path
+                ),
+                "acrobat" => format!(
+                    "[Desktop Entry]\n\
+                     Type=Application\n\
+                     Name=Acrobat PDF Signer (Workspace)\n\
+                     Name[vi]=Acrobat PDF Signer (Không gian làm việc)\n\
+                     Exec=\"{}\" --launch-app acrobat\n\
+                     Icon={}\n\
+                     Terminal=false\n\
+                     Categories=Office;Security;\n\
+                     Comment=Isolated Secure Workspace for Acrobat PDF Signer\n\
+                     Comment[vi]=Không gian làm việc bảo mật cô lập cho Acrobat PDF Signer\n",
+                    exe_path_str, icon_path
+                ),
+                _ => format!(
+                    "[Desktop Entry]\n\
+                     Type=Application\n\
+                     Name=Secure Workspace\n\
+                     Name[vi]=Không gian làm việc Bảo mật\n\
+                     Exec=\"{}\" --launch-app {}\n\
+                     Icon={}\n\
+                     Terminal=false\n\
+                     Categories=Utility;\n\
+                     Comment=Isolated Secure Workspace\n\
+                     Comment[vi]=Không gian làm việc bảo mật cô lập\n",
+                    exe_path_str, app_id, icon_path
+                ),
+            };
+
+            let dest_path = format!("{}/{}", desktop_dir, filename);
+            if let Err(e) = std::fs::write(&dest_path, desktop_content) {
+                return Err(format!("Failed to write desktop launcher: {}", e));
+            }
+        }
+
+        (filename, app_name.to_string())
+    };
 
     let output = new_command("gsettings")
         .args(&["get", "org.gnome.shell", "favorite-apps"])
@@ -379,7 +749,191 @@ async fn check_for_updates() -> Result<String, String> {
     }
 }
 
+#[tauri::command]
+async fn install_browser_extension(custom_chrome_id: Option<String>) -> Result<String, String> {
+    let current_exe = std::env::current_exe()
+        .map_err(|e| format!("Failed to get current executable path: {}", e))?;
+    let exe_path_str = current_exe.to_string_lossy().to_string();
 
+    let data_dir = uid_agent::get_uid_data_dir();
+    let chrome_manifest_path = format!("{}/one.uid.agent.chrome.json", data_dir);
+    let firefox_manifest_path = format!("{}/one.uid.agent.firefox.json", data_dir);
+
+    // 1. Create Native Messaging Host Manifest for Chrome/Edge
+    let mut allowed_origins = vec![
+        "chrome-extension://coobgfinhhjocjlhjiaegcfolhdgiinb/".to_string(),
+        "chrome-extension://hgoifnbplldplmkkllppgmdofijpfnii/".to_string(),
+    ];
+    if let Some(ref custom_id) = custom_chrome_id {
+        if !custom_id.trim().is_empty() {
+            allowed_origins.push(format!("chrome-extension://{}/", custom_id.trim()));
+        }
+    }
+
+    let chrome_manifest = serde_json::json!({
+        "name": "one.uid.agent",
+        "description": "UID Endpoint Security Agent Native Messaging Host",
+        "path": exe_path_str,
+        "type": "stdio",
+        "allowed_origins": allowed_origins
+    });
+    std::fs::write(&chrome_manifest_path, serde_json::to_string_pretty(&chrome_manifest).unwrap())
+        .map_err(|e| format!("Failed to write Chrome manifest: {}", e))?;
+
+    // 2. Create Native Messaging Host Manifest for Firefox
+    let firefox_manifest = serde_json::json!({
+        "name": "one.uid.agent",
+        "description": "UID Endpoint Security Agent Native Messaging Host",
+        "path": chrome_manifest["path"],
+        "type": "stdio",
+        "allowed_extensions": [
+            "passkey@uid.one"
+        ]
+    });
+    std::fs::write(&firefox_manifest_path, serde_json::to_string_pretty(&firefox_manifest).unwrap())
+        .map_err(|e| format!("Failed to write Firefox manifest: {}", e))?;
+
+    let mut logs = Vec::new();
+
+    // 3. Register Native Messaging Host & Extensions per Platform
+    #[cfg(target_os = "windows")]
+    {
+        // Chrome Registry keys
+        let cmd = format!(
+            "reg add \"HKCU\\Software\\Google\\Chrome\\NativeMessagingHosts\\one.uid.agent\" /ve /t REG_SZ /d \"{}\" /f",
+            chrome_manifest_path.replace("/", "\\")
+        );
+        let _ = new_command("cmd").args(["/C", &cmd]).status();
+        
+        let cmd_ext = "reg add \"HKCU\\Software\\Google\\Chrome\\Extensions\\coobgfinhhjocjlhjiaegcfolhdgiinb\" /v update_url /t REG_SZ /d \"https://clients2.google.com/service/update2/crx\" /f";
+        let _ = new_command("cmd").args(["/C", cmd_ext]).status();
+
+        // Edge Registry keys
+        let cmd_edge = format!(
+            "reg add \"HKCU\\Software\\Microsoft\\Edge\\NativeMessagingHosts\\one.uid.agent\" /ve /t REG_SZ /d \"{}\" /f",
+            chrome_manifest_path.replace("/", "\\")
+        );
+        let _ = new_command("cmd").args(["/C", &cmd_edge]).status();
+        
+        let cmd_edge_ext = "reg add \"HKCU\\Software\\Microsoft\\Edge\\Extensions\\hgoifnbplldplmkkllppgmdofijpfnii\" /v update_url /t REG_SZ /d \"https://clients2.google.com/service/update2/crx\" /f";
+        let _ = new_command("cmd").args(["/C", cmd_edge_ext]).status();
+
+        // Firefox Registry keys
+        let cmd_ff = format!(
+            "reg add \"HKCU\\Software\\Mozilla\\NativeMessagingHosts\\one.uid.agent\" /ve /t REG_SZ /d \"{}\" /f",
+            firefox_manifest_path.replace("/", "\\")
+        );
+        let _ = new_command("cmd").args(["/C", &cmd_ff]).status();
+
+        logs.push("Registered Native Messaging & extensions in Windows Registry for Chrome, Edge, and Firefox.".to_string());
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        let home = std::env::var("HOME").unwrap_or_default();
+        
+        // Native Messaging paths
+        let chrome_nm_dir = format!("{}/Library/Application Support/Google/Chrome/NativeMessagingHosts", home);
+        let chromium_nm_dir = format!("{}/Library/Application Support/Chromium/NativeMessagingHosts", home);
+        let ff_nm_dir = format!("{}/Library/Application Support/Mozilla/NativeMessagingHosts", home);
+
+        let _ = std::fs::create_dir_all(&chrome_nm_dir);
+        let _ = std::fs::copy(&chrome_manifest_path, format!("{}/one.uid.agent.json", chrome_nm_dir));
+
+        let _ = std::fs::create_dir_all(&chromium_nm_dir);
+        let _ = std::fs::copy(&chrome_manifest_path, format!("{}/one.uid.agent.json", chromium_nm_dir));
+
+        let _ = std::fs::create_dir_all(&ff_nm_dir);
+        let _ = std::fs::copy(&firefox_manifest_path, format!("{}/one.uid.agent.json", ff_nm_dir));
+
+        // External Extensions paths (Chrome)
+        let chrome_ext_dir = format!("{}/Library/Application Support/Google/Chrome/External Extensions", home);
+        if std::fs::create_dir_all(&chrome_ext_dir).is_ok() {
+            let ext_json = serde_json::json!({
+                "external_update_url": "https://clients2.google.com/service/update2/crx"
+            });
+            let _ = std::fs::write(
+                format!("{}/coobgfinhhjocjlhjiaegcfolhdgiinb.json", chrome_ext_dir),
+                serde_json::to_string_pretty(&ext_json).unwrap()
+            );
+        }
+
+        // Open Safari Extensions panel as requested (for Safari support on macOS)
+        let _ = new_command("open")
+            .args(["-b", "com.apple.Safari", "--args", "--show-extension-preferences"])
+            .status();
+
+        logs.push("Copied Native Messaging manifests & configured External Extensions. Triggered Safari Preferences.".to_string());
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        let home = std::env::var("HOME").unwrap_or_else(|_| "/home/s".to_string());
+        
+        // Native Messaging paths
+        let chrome_nm_dir = format!("{}/.config/google-chrome/NativeMessagingHosts", home);
+        let chromium_nm_dir = format!("{}/.config/chromium/NativeMessagingHosts", home);
+        let ff_nm_dir = format!("{}/.mozilla/native-messaging-hosts", home);
+
+        let _ = std::fs::create_dir_all(&chrome_nm_dir);
+        let _ = std::fs::copy(&chrome_manifest_path, format!("{}/one.uid.agent.json", chrome_nm_dir));
+
+        let _ = std::fs::create_dir_all(&chromium_nm_dir);
+        let _ = std::fs::copy(&chrome_manifest_path, format!("{}/one.uid.agent.json", chromium_nm_dir));
+
+        let _ = std::fs::create_dir_all(&ff_nm_dir);
+        let _ = std::fs::copy(&firefox_manifest_path, format!("{}/one.uid.agent.json", ff_nm_dir));
+
+        // External Extensions paths (Chrome)
+        let chrome_ext_dir = format!("{}/.config/google-chrome/External Extensions", home);
+        if std::fs::create_dir_all(&chrome_ext_dir).is_ok() {
+            let ext_json = serde_json::json!({
+                "external_update_url": "https://clients2.google.com/service/update2/crx"
+            });
+            let _ = std::fs::write(
+                format!("{}/coobgfinhhjocjlhjiaegcfolhdgiinb.json", chrome_ext_dir),
+                serde_json::to_string_pretty(&ext_json).unwrap()
+            );
+        }
+
+        logs.push("Registered Native Messaging hosts & External Extensions on Linux.".to_string());
+    }
+
+    // 4. Firefox profile .xpi injection
+    let firefox_zip_bytes = include_bytes!("../../../uid-link/uid-link-firefox.zip");
+    
+    let ff_profiles_dir = if cfg!(target_os = "windows") {
+        std::env::var("APPDATA").map(|d| format!("{}/Mozilla/Firefox/Profiles", d)).ok()
+    } else if cfg!(target_os = "macos") {
+        let home = std::env::var("HOME").unwrap_or_default();
+        Some(format!("{}/Library/Application Support/Firefox/Profiles", home))
+    } else {
+        let home = std::env::var("HOME").unwrap_or_else(|_| "/home/s".to_string());
+        Some(format!("{}/.mozilla/firefox", home))
+    };
+
+    if let Some(profiles_dir) = ff_profiles_dir {
+        if let Ok(entries) = std::fs::read_dir(&profiles_dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    let folder_name = path.file_name().unwrap_or_default().to_string_lossy();
+                    // Firefox profiles normally end with default, default-release, or dev-edition
+                    if folder_name.contains("default") || folder_name.contains("release") || folder_name.contains("dev-edition") {
+                        let ext_folder = path.join("extensions");
+                        let _ = std::fs::create_dir_all(&ext_folder);
+                        let dest_xpi = ext_folder.join("passkey@uid.one.xpi");
+                        if std::fs::write(&dest_xpi, firefox_zip_bytes).is_ok() {
+                            logs.push(format!("Injected passkey@uid.one.xpi into Firefox profile: {}", folder_name));
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    Ok(logs.join("\n"))
+}
 
 // Entry Point
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -425,6 +979,77 @@ pub fn run() {
                 let _ = std::fs::write(format!("{}/uid-agent-desktop.desktop", desktop_dir), agent_desktop_content);
             }
 
+            // Check if application was launched for a specific sandbox workspace app shortcut
+            let args: Vec<String> = std::env::args().collect();
+            let mut launch_target: Option<String> = None;
+            for i in 0..args.len() {
+                if args[i] == "--launch-app" && i + 1 < args.len() {
+                    launch_target = Some(args[i + 1].clone());
+                    break;
+                }
+            }
+
+            // Single instance lock check using loopback TCP socket on port 13014
+            use std::io::Write;
+            if let Ok(mut stream) = std::net::TcpStream::connect("127.0.0.1:13014") {
+                if let Some(app_id) = launch_target {
+                    let _ = stream.write_all(format!("launch:{}", app_id).as_bytes());
+                } else {
+                    let _ = stream.write_all(b"focus-main");
+                }
+                std::process::exit(0);
+            }
+
+            // Start loopback TCP socket single-instance listener on port 13014 for the first running process
+            let app_handle_ipc = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                if let Ok(listener) = tokio::net::TcpListener::bind("127.0.0.1:13014").await {
+                    loop {
+                        if let Ok((mut stream, _)) = listener.accept().await {
+                            let app_handle = app_handle_ipc.clone();
+                            tokio::spawn(async move {
+                                use tokio::io::{AsyncReadExt, AsyncWriteExt};
+                                let mut buf = [0u8; 1024];
+                                if let Ok(n) = stream.read(&mut buf).await {
+                                    let msg = String::from_utf8_lossy(&buf[..n]).trim().to_string();
+                                    if msg.starts_with("launch:") {
+                                        let app_id = msg.replace("launch:", "");
+                                        if let Some(wapp) = get_workspace_app(&app_id) {
+                                            let _ = launch_sandbox_app(app_id, wapp.name.to_string(), wapp.url.to_string(), app_handle);
+                                        }
+                                    } else if msg == "focus-main" {
+                                        if let Some(main_win) = app_handle.get_webview_window("main") {
+                                            let _ = main_win.show();
+                                            let _ = main_win.set_focus();
+                                        }
+                                    }
+                                }
+                                let _ = stream.write_all(b"OK").await;
+                            });
+                        }
+                    }
+                }
+            });
+
+            if let Some(app_id) = launch_target {
+                if let Some(wapp) = get_workspace_app(&app_id) {
+                    let app_handle = app.handle().clone();
+                    tauri::async_runtime::spawn(async move {
+                        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+                        let _ = launch_sandbox_app(app_id, wapp.name.to_string(), wapp.url.to_string(), app_handle);
+                    });
+
+                    // Hide main window if created
+                    let app_handle_main = app.handle().clone();
+                    tauri::async_runtime::spawn(async move {
+                        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+                        if let Some(main_win) = app_handle_main.get_webview_window("main") {
+                            let _ = main_win.hide();
+                        }
+                    });
+                }
+            }
+
             // Initialize system tray menu
             let quit_i = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
             let show_i = MenuItem::with_id(app, "show", "Show Dashboard", true, None::<&str>)?;
@@ -468,8 +1093,28 @@ pub fn run() {
         // 2. Hide window when closed instead of terminating application
         .on_window_event(|window, event| match event {
             WindowEvent::CloseRequested { api, .. } => {
-                api.prevent_close();
-                window.hide().unwrap();
+                if window.label() == "main" {
+                    api.prevent_close();
+                    window.hide().unwrap();
+                } else {
+                    // Sandbox window close: exit app if no other visible windows exist
+                    let app_handle = window.app_handle().clone();
+                    let window_label = window.label().to_string();
+                    tauri::async_runtime::spawn(async move {
+                        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                        let mut visible_windows = 0;
+                        for (label, win) in app_handle.webview_windows() {
+                            if label != window_label {
+                                if let Ok(true) = win.is_visible() {
+                                    visible_windows += 1;
+                                }
+                            }
+                        }
+                        if visible_windows == 0 {
+                            app_handle.exit(0);
+                        }
+                    });
+                }
             }
             _ => {}
         })
@@ -481,10 +1126,13 @@ pub fn run() {
             get_user_profile,
             logout_user,
             open_browser_url,
+            launch_sandbox_app,
+            sync_sandbox_profile,
             remediate_firewall,
             remediate_screen_lock,
             get_signature_history,
-            get_app_version
+            get_app_version,
+            install_browser_extension
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

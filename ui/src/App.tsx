@@ -11,7 +11,20 @@ import {
   IconX,
   IconSettings,
   IconUser,
-  IconLogout
+  IconLogout,
+  IconBox,
+  IconFingerprint,
+  IconTerminal,
+  IconPlayerPlay,
+  IconPlayerStop,
+  IconPlus,
+  IconLoader2,
+  IconSearch,
+  IconCheck,
+  IconTrash,
+  IconDownload,
+  IconUpload,
+  IconHistory
 } from '@tabler/icons-react';
 
 import en from '../messages/en.json';
@@ -107,7 +120,7 @@ interface SignatureHistoryEntry {
 }
 
 export default function App() {
-  const [activeTab, setActiveTab] = useState<'dashboard' | 'tokens' | 'settings'>('dashboard');
+  const [activeTab, setActiveTab] = useState<'dashboard' | 'tokens' | 'apps' | 'approvals' | 'settings'>('dashboard');
   const [userProfile, setUserProfile] = useState<UserProfile | null>(null);
   const [language, setLanguage] = useState<string>(() => {
     return localStorage.getItem('uid-agent-lang') || 'en';
@@ -123,14 +136,319 @@ export default function App() {
   const [log, setLog] = useState<string>('');
   const [checkingUpdate, setCheckingUpdate] = useState<boolean>(false);
   const [appVersion, setAppVersion] = useState<string>('3.0.0');
+  const [customExtId, setCustomExtId] = useState<string>('');
+  const [showExtSettings, setShowExtSettings] = useState<boolean>(false);
+  const [installingExt, setInstallingExt] = useState<boolean>(false);
   const [showLUKSWizard, setShowLUKSWizard] = useState<boolean>(false);
   const [showFirewallWizard, setShowFirewallWizard] = useState<boolean>(false);
   const [showSecureBootWizard, setShowSecureBootWizard] = useState<boolean>(false);
   const [showSSHKeysWizard, setShowSSHKeysWizard] = useState<boolean>(false);
   const [showVPNWizard, setShowVPNWizard] = useState<boolean>(false);
   const [remediatingMap, setRemediatingMap] = useState<Record<string, boolean>>({});
+  const [isSyncing, setIsSyncing] = useState<Record<string, boolean>>({});
+  const [syncStatus, setSyncStatus] = useState<Record<string, string>>(() => {
+    try {
+      const saved = localStorage.getItem('uid-sandbox-sync-status');
+      return saved ? JSON.parse(saved) : {};
+    } catch {
+      return {};
+    }
+  });
+  const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' | 'info' } | null>(null);
+  
+  const showToast = (message: string, type: 'success' | 'error' | 'info' = 'info') => {
+    setToast({ message, type });
+    setTimeout(() => {
+      setToast(current => current?.message === message ? null : current);
+    }, 5000);
+  };
+  // App Sandbox State (Isolated Web Containers)
+  interface SandboxApp {
+    id: string;
+    name: string;
+    description: string;
+    status: 'running' | 'stopped' | 'not_configured';
+    url: string;
+    logs: string[];
+    isInstalling?: boolean;
+    installProgress?: number;
+  }
 
+  const [sandboxApps, setSandboxApps] = useState<SandboxApp[]>([
+    {
+      id: 'zalo',
+      name: 'Zalo Messenger',
+      description: 'Run Zalo Web in a secure, isolated desktop container. Preserves all chat history, local cache, and user profile data permanently.',
+      status: 'stopped',
+      url: 'https://chat.zalo.me/',
+      logs: ['[sandbox] Container partition initialized at ~/.local/share/uid/apps/zalo', '[sandbox] Isolated cookies/localStorage storage active.']
+    },
+    {
+      id: 'misa',
+      name: 'MISA Accounting',
+      description: 'Isolated accounting workspace. Prevents invoice session sniffing and keeps ledger tokens secure.',
+      status: 'not_configured',
+      url: 'https://act.misa.com.vn/',
+      logs: []
+    },
+    {
+      id: 'pdf-signer',
+      name: 'Acrobat PDF Signer',
+      description: 'Secure browser workspace for document signing and verification.',
+      status: 'stopped',
+      url: 'https://www.adobe.com/acrobat/online/sign-pdf.html',
+      logs: ['[sandbox] Secure signature tunnel initialized.']
+    }
+  ]);
+  const [selectedApp, setSelectedApp] = useState<SandboxApp | null>(null);
+  const [searchQuery, setSearchQuery] = useState<string>('');
+  const [showAddAppModal, setShowAddAppModal] = useState<boolean>(false);
+  const [newAppName, setNewAppName] = useState<string>('');
+  const [newAppUrl, setNewAppUrl] = useState<string>('');
+  const [showDevOptions, setShowDevOptions] = useState<boolean>(false);
+  const [isCardHovered, setIsCardHovered] = useState<boolean>(false);
 
+  // Pending Approvals State
+  interface ApprovalRequest {
+    id: string;
+    origin: string;
+    type: 'login' | 'sign_document';
+    title: string;
+    description: string;
+    payload: string;
+    timestamp: string;
+    isSigning?: boolean;
+    isSuccess?: boolean;
+  }
+
+  const [pendingApprovals, setPendingApprovals] = useState<ApprovalRequest[]>([
+    {
+      id: 'req_1',
+      origin: 'http://localhost:3000',
+      type: 'login',
+      title: 'Identity Login Approval',
+      description: 'Authenticate connection request from Trip.Express Workspace.',
+      payload: 'challenge_token_9x12a87c12f0088b72e12e',
+      timestamp: new Date().toLocaleTimeString()
+    },
+    {
+      id: 'req_2',
+      origin: 'http://localhost:3000',
+      type: 'sign_document',
+      title: 'Contract PDF Sign Request',
+      description: 'Cryptographically sign "trip_express_contract_2026.pdf" with local token.',
+      payload: '8f0a2c918bb1389cb1f1c991e12db59846bf493aa9a8b1399f92e92c2876611e',
+      timestamp: new Date(Date.now() - 60000).toLocaleTimeString()
+    }
+  ]);
+  const handleLaunchApp = (appId: string) => {
+    setSandboxApps(prev => prev.map(app => {
+      if (app.id === appId) {
+        const newLogs = [
+          ...app.logs,
+          `[sandbox] [${new Date().toLocaleTimeString()}] Spawning isolated WebView container...`,
+          `[sandbox] [${new Date().toLocaleTimeString()}] Local user profile directory: ~/.local/share/uid/apps/${appId}`,
+          `[sandbox] [${new Date().toLocaleTimeString()}] Target URL: ${app.url}`,
+          `[sandbox] [${new Date().toLocaleTimeString()}] WebView process launched successfully.`
+        ];
+        const updated = { ...app, status: 'running' as const, logs: newLogs };
+        if (selectedApp?.id === appId) {
+          setSelectedApp(updated);
+        }
+        
+        // Invoke native Tauri command to launch WebView with persistent local data
+        invoke('launch_sandbox_app', { appId, appName: app.name, url: app.url }).catch(err => {
+          console.error('Failed to launch sandbox app window:', err);
+        });
+        
+        return updated;
+      }
+      return app;
+    }));
+  };
+
+  const handleStopApp = (appId: string) => {
+    setSandboxApps(prev => prev.map(app => {
+      if (app.id === appId) {
+        const newLogs = [
+          ...app.logs,
+          `[sandbox] [${new Date().toLocaleTimeString()}] Terminating isolated WebView...`,
+          `[sandbox] [${new Date().toLocaleTimeString()}] Isolated session saved successfully.`
+        ];
+        const updated = { ...app, status: 'stopped' as const, logs: newLogs };
+        if (selectedApp?.id === appId) {
+          setSelectedApp(updated);
+        }
+        return updated;
+      }
+      return app;
+    }));
+  };
+
+  const handleInstallApp = (appId: string) => {
+    setSandboxApps(prev => prev.map(app => {
+      if (app.id === appId) {
+        return { ...app, isInstalling: true, installProgress: 0 };
+      }
+      return app;
+    }));
+
+    let progress = 0;
+    const interval = setInterval(() => {
+      progress += 10;
+      setSandboxApps(prev => prev.map(app => {
+        if (app.id === appId) {
+          const finished = progress >= 100;
+          if (finished) {
+            clearInterval(interval);
+            const newLogs = [
+              `[sandbox] [${new Date().toLocaleTimeString()}] Creating isolated storage directories...`,
+              `[sandbox] [${new Date().toLocaleTimeString()}] Persisting custom workspace profiles...`,
+              `[sandbox] [${new Date().toLocaleTimeString()}] Desktop Launcher created successfully.`
+            ];
+            const updated = { 
+              ...app, 
+              status: 'stopped' as const, 
+              isInstalling: false, 
+              installProgress: 100,
+              logs: newLogs
+            };
+            if (selectedApp?.id === appId) {
+              setSelectedApp(updated);
+            }
+            return updated;
+          }
+          return { ...app, installProgress: progress };
+        }
+        return app;
+      }));
+    }, 200);
+  };
+
+  const handleAddCustomApp = () => {
+    if (!newAppName.trim() || !newAppUrl.trim()) return;
+    const id = newAppName.toLowerCase().replace(/\s+/g, '-');
+    const newApp: SandboxApp = {
+      id,
+      name: newAppName,
+      description: `Isolated workspace for ${newAppName}.`,
+      status: 'not_configured',
+      url: newAppUrl,
+      logs: []
+    };
+    setSandboxApps(prev => [...prev, newApp]);
+    setShowAddAppModal(false);
+    setNewAppName('');
+    setNewAppUrl('');
+    setTimeout(() => {
+      handleInstallApp(id);
+    }, 500);
+  };
+
+  const handleSyncProfile = async (appId: string, url: string, direction: 'import' | 'export' | 'restore') => {
+    setIsSyncing(prev => ({ ...prev, [appId]: true }));
+    try {
+      const response = await invoke<string>('sync_sandbox_profile', {
+        appId,
+        targetUrl: url,
+        direction
+      });
+      
+      const newLogs = [
+        `[sync] [${new Date().toLocaleTimeString()}] Starting synchronization (${direction})...`,
+        `[sync] [${new Date().toLocaleTimeString()}] ${response}`
+      ];
+      
+      // Update app logs
+      setSandboxApps(prev => prev.map(app => {
+        if (app.id === appId) {
+          const updatedLogs = [...app.logs, ...newLogs];
+          const updated = { ...app, logs: updatedLogs };
+          if (selectedApp?.id === appId) {
+            setSelectedApp(updated);
+          }
+          return updated;
+        }
+        return app;
+      }));
+
+      // Update sync status timestamp
+      const nowStr = new Date().toLocaleString();
+      setSyncStatus(prev => {
+        const next = { ...prev, [appId]: nowStr };
+        localStorage.setItem('uid-sandbox-sync-status', JSON.stringify(next));
+        return next;
+      });
+
+      let toastMsg = '';
+      if (direction === 'import') {
+        toastMsg = t('syncSuccessImport');
+      } else if (direction === 'export') {
+        toastMsg = t('syncSuccessExport');
+      } else {
+        toastMsg = t('syncSuccessRestore');
+      }
+      showToast(toastMsg, 'success');
+    } catch (err) {
+      const newLogs = [
+        `[sync] [${new Date().toLocaleTimeString()}] Error: ${err}`
+      ];
+      setSandboxApps(prev => prev.map(app => {
+        if (app.id === appId) {
+          const updatedLogs = [...app.logs, ...newLogs];
+          const updated = { ...app, logs: updatedLogs };
+          if (selectedApp?.id === appId) {
+            setSelectedApp(updated);
+          }
+          return updated;
+        }
+        return app;
+      }));
+      showToast(t('syncFailed').replace('{error}', String(err)), 'error');
+    } finally {
+      setIsSyncing(prev => ({ ...prev, [appId]: false }));
+    }
+  };
+
+  const handleApproveRequest = (reqId: string) => {
+    setPendingApprovals(prev => prev.map(req => {
+      if (req.id === reqId) {
+        return { ...req, isSigning: true };
+      }
+      return req;
+    }));
+
+    setTimeout(async () => {
+      const req = pendingApprovals.find(r => r.id === reqId);
+      if (req && req.type === 'sign_document') {
+        const historyEntry: SignatureHistoryEntry = {
+          timestamp: new Date().toISOString(),
+          cert_id: 'HSM-ATTEST-01',
+          subject: 'CN=Admin UID, O=UID.one, C=VN',
+          hash: req.payload,
+          status: 'Success',
+          origin: req.origin,
+          referer: req.origin
+        };
+        setSigHistory(prev => [historyEntry, ...prev]);
+      }
+
+      setPendingApprovals(prev => prev.map(r => {
+        if (r.id === reqId) {
+          return { ...r, isSigning: false, isSuccess: true };
+        }
+        return r;
+      }));
+
+      setTimeout(() => {
+        setPendingApprovals(prev => prev.filter(r => r.id !== reqId));
+      }, 1000);
+    }, 1500);
+  };
+
+  const handleRejectRequest = (reqId: string) => {
+    setPendingApprovals(prev => prev.filter(req => req.id !== reqId));
+  };
 
   // Load initial info once on mount
   useEffect(() => {
@@ -154,6 +472,26 @@ export default function App() {
       }
     };
     loadInitialData();
+  }, []);
+
+  // Poll user profile status periodically to keep sync state updated dynamically
+  useEffect(() => {
+    const interval = setInterval(async () => {
+      try {
+        const profile = await invoke<UserProfile | null>('get_user_profile');
+        setUserProfile(prev => {
+          // Compare objects to avoid trigger state updates/re-renders if same
+          if (JSON.stringify(prev) !== JSON.stringify(profile)) {
+            return profile;
+          }
+          return prev;
+        });
+      } catch (err) {
+        console.warn('Failed to poll user profile:', err);
+      }
+    }, 2000);
+
+    return () => clearInterval(interval);
   }, []);
 
   // Poll USB certificates only when tokens tab is active
@@ -218,7 +556,7 @@ export default function App() {
     } catch (e: any) {
       console.error(e);
       setLog(t('remediationFailed').replace('{error}', e.toString()));
-      alert(t('remediationFailed').replace('{error}', e.toString()));
+      showToast(t('remediationFailed').replace('{error}', e.toString()), 'error');
     } finally {
       setRemediatingMap(prev => ({ ...prev, screenLock: false }));
     }
@@ -251,13 +589,68 @@ export default function App() {
     try {
       const res = await invoke<string>('pin_to_dock', { appId });
       setLog(res);
+      showToast(t('pinSuccessMsg'), 'success');
     } catch (e: any) {
       setLog(`Error pinning app to GNOME Dock: ${e}`);
+      showToast(`${t('pinFailedMsg')}: ${e}`, 'error');
+    }
+  };
+
+  const handleInstallExtension = async () => {
+    setInstallingExt(true);
+    setLog('Initializing UID Link Browser Extension installation...');
+    try {
+      const res = await invoke<string>('install_browser_extension', { 
+        customChromeId: customExtId || null 
+      });
+      setLog(`${t('extensionInstallSuccess')}\n\nDetails:\n${res}`);
+    } catch (e: any) {
+      setLog(`${t('extensionInstallFailed').replace('{error}', e)}`);
+    } finally {
+      setInstallingExt(false);
     }
   };
 
   return (
     <div className="app-container" dir={language === 'ar' ? 'rtl' : 'ltr'}>
+      {toast && (
+        <div style={{
+          position: 'fixed',
+          bottom: '24px',
+          right: '24px',
+          background: toast.type === 'error' ? 'rgba(239, 68, 68, 0.15)' : 'rgba(16, 185, 129, 0.15)',
+          border: toast.type === 'error' ? '1px solid rgba(239, 68, 68, 0.3)' : '1px solid rgba(16, 185, 129, 0.3)',
+          color: toast.type === 'error' ? 'var(--danger-color)' : 'var(--success-color)',
+          borderRadius: '12px',
+          padding: '14px 20px',
+          boxShadow: '0 8px 32px rgba(0,0,0,0.5)',
+          zIndex: 9999,
+          backdropFilter: 'blur(20px)',
+          display: 'flex',
+          alignItems: 'center',
+          gap: '10px',
+          animation: 'slideIn 0.3s ease-out'
+        }}>
+          {toast.type === 'error' ? <IconAlertTriangle size={18} /> : <IconShieldCheck size={18} />}
+          <span style={{ fontSize: '13px', fontWeight: '500' }}>{toast.message}</span>
+          <button 
+            onClick={() => setToast(null)}
+            style={{ 
+              background: 'none', 
+              border: 'none', 
+              color: 'inherit', 
+              cursor: 'pointer', 
+              opacity: 0.7, 
+              marginLeft: '10px',
+              padding: 0,
+              display: 'flex',
+              alignItems: 'center'
+            }}
+          >
+            <IconX size={14} />
+          </button>
+        </div>
+      )}
       {/* Header */}
       <header className="app-header">
         <div className="header-logo">
@@ -302,13 +695,25 @@ export default function App() {
                       <img src={userProfile.avatar} alt={userProfile.name} className="avatar-img" />
                     ) : (
                       <div className="avatar-placeholder">
-                        {userProfile.name.charAt(0).toUpperCase()}
+                        {/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(userProfile.name.trim()) ? (
+                          <IconShieldCheck size={16} className="gold-icon" />
+                        ) : (
+                          userProfile.name.charAt(0).toUpperCase()
+                        )}
                       </div>
                     )}
                   </div>
                   <div className="profile-info">
-                    <span className="profile-name" title={userProfile.name}>{userProfile.name}</span>
-                    <span className="profile-email" title={userProfile.email}>{userProfile.email}</span>
+                    <span className="profile-name" title={userProfile.name}>
+                      {/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(userProfile.name.trim()) 
+                        ? t('securedDevice') 
+                        : userProfile.name}
+                    </span>
+                    <span className="profile-email" title={userProfile.email}>
+                      {/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(userProfile.email.trim())
+                        ? `${userProfile.email.slice(0, 8)}...${userProfile.email.slice(-8)}`
+                        : userProfile.email}
+                    </span>
                   </div>
                   <button className="profile-logout-btn" onClick={handleLogout} title={t('userLogout')}>
                     <IconLogout size={16} />
@@ -344,6 +749,38 @@ export default function App() {
               >
                 <IconDeviceUsb size={18} />
                 <span>{t('tokensTab')}</span>
+              </button>
+
+              <button 
+                className={`nav-btn ${activeTab === 'apps' ? 'active' : ''}`}
+                onClick={() => setActiveTab('apps')}
+              >
+                <IconBox size={18} />
+                <span>{t('appsTab')}</span>
+              </button>
+
+              <button 
+                className={`nav-btn ${activeTab === 'approvals' ? 'active' : ''}`}
+                onClick={() => setActiveTab('approvals')}
+                style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', width: '100%' }}
+              >
+                <div style={{ display: 'flex', alignItems: 'center', gap: '14px' }}>
+                  <IconFingerprint size={18} />
+                  <span>{t('approvalsTab')}</span>
+                </div>
+                {pendingApprovals.length > 0 && (
+                  <span style={{ 
+                    background: 'var(--danger-color)', 
+                    color: 'white', 
+                    borderRadius: '50%', 
+                    padding: '2px 6px', 
+                    fontSize: '10px', 
+                    fontWeight: 'bold',
+                    lineHeight: 1
+                  }}>
+                    {pendingApprovals.length}
+                  </span>
+                )}
               </button>
 
               <button 
@@ -659,7 +1096,7 @@ export default function App() {
                                   className="btn-copy-mini"
                                   onClick={() => {
                                     navigator.clipboard.writeText(cert.serial || '');
-                                    alert('Copied certificate serial to clipboard!');
+                                    showToast(t('copiedClipboard'), 'success');
                                   }}
                                   title="Copy Serial Number"
                                 >
@@ -795,7 +1232,42 @@ export default function App() {
                 </div>
               </div>
 
-
+              <div className="settings-section" style={{ marginTop: '24px' }}>
+                <h3 className="settings-section-title">{t('extSection')}</h3>
+                <p className="settings-section-desc">{t('extDesc')}</p>
+                <div className="update-card-row">
+                  <div style={{ fontSize: '13px', color: 'var(--text-secondary)' }}>
+                    <span>{t('extStatusLabel') || 'UID Link Extension'}</span>
+                  </div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                    {showExtSettings && (
+                      <input 
+                        type="text" 
+                        placeholder="Extension ID (Optional)"
+                        value={customExtId}
+                        onChange={(e) => setCustomExtId(e.target.value)}
+                        className="settings-input"
+                        style={{ width: '180px', margin: 0 }}
+                      />
+                    )}
+                    <button 
+                      onClick={() => setShowExtSettings(!showExtSettings)}
+                      className={`btn btn-secondary`}
+                      title="Custom Extension ID"
+                      style={{ padding: '6px 10px', display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}
+                    >
+                      <IconSettings className="w-4 h-4" stroke={1.5} />
+                    </button>
+                    <button 
+                      onClick={handleInstallExtension}
+                      className="btn btn-primary"
+                      disabled={installingExt}
+                    >
+                      {installingExt ? t('installingExtension') : t('btnInstallExtension')}
+                    </button>
+                  </div>
+                </div>
+              </div>
 
               <div className="settings-section" style={{ marginTop: '24px' }}>
                 <h3 className="settings-section-title">{t('updateSection')}</h3>
@@ -826,10 +1298,569 @@ export default function App() {
               </div>
 
               {log && (
-                <div className="log-console" style={{ marginTop: '16px' }}>
-                  <pre style={{ margin: 0, padding: '10px 14px', fontSize: '12px', background: 'rgba(0,0,0,0.2)', border: '1px solid var(--border-color)', borderRadius: '8px', color: 'var(--accent-gold)', fontFamily: 'monospace', overflowX: 'auto' }}>{log}</pre>
-                </div>
+                log.trim().includes('\n') ? (
+                  <div className="log-console" style={{ marginTop: '16px' }}>
+                    <h4>{t('consoleLogOutput')}</h4>
+                    <pre>{log}</pre>
+                  </div>
+                ) : (
+                  <div style={{ marginTop: '16px', fontSize: '13px', color: 'var(--accent-gold)', paddingLeft: '4px' }}>
+                    {log}
+                  </div>
+                )
               )}
+            </div>
+          )}
+
+          {activeTab === 'apps' && (
+            <div className="tab-pane">
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
+                <h2 className="section-title">{t('appsTitle')}</h2>
+                <button 
+                  className="btn btn-primary" 
+                  onClick={() => setShowAddAppModal(true)}
+                  style={{ display: 'flex', alignItems: 'center', gap: '6px', padding: '8px 16px', fontSize: '13px' }}
+                >
+                  <IconPlus size={16} />
+                  <span>{t('addAppBtn')}</span>
+                </button>
+              </div>
+              <p className="section-subtitle">{t('appsSubtitle')}</p>
+
+              <div style={{ display: 'grid', gridTemplateColumns: '300px 1fr', gap: '28px', marginTop: '24px' }}>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+                  <div style={{ position: 'relative' }}>
+                    <input 
+                      type="text" 
+                      placeholder={t('searchPlaceholder')}
+                      value={searchQuery}
+                      onChange={(e) => setSearchQuery(e.target.value)}
+                      style={{ 
+                        width: '100%', 
+                        padding: '10px 12px 10px 38px', 
+                        background: 'rgba(255,255,255,0.03)', 
+                        border: '1px solid var(--border-color)', 
+                        borderRadius: '10px',
+                        color: 'white',
+                        fontSize: '13px'
+                      }}
+                    />
+                    <IconSearch size={16} style={{ position: 'absolute', left: '12px', top: '12px', color: 'var(--text-muted)' }} />
+                  </div>
+
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', maxHeight: '500px', overflowY: 'auto' }}>
+                    {sandboxApps
+                      .filter(app => app.name.toLowerCase().includes(searchQuery.toLowerCase()))
+                      .map(app => (
+                        <div 
+                          key={app.id}
+                          className={`profile-card ${selectedApp?.id === app.id ? 'active' : ''}`}
+                          onClick={() => setSelectedApp(app)}
+                          style={{ 
+                            cursor: 'pointer',
+                            background: selectedApp?.id === app.id ? 'rgba(212, 175, 55, 0.1)' : 'rgba(255,255,255,0.02)',
+                            borderColor: selectedApp?.id === app.id ? 'rgba(212, 175, 55, 0.3)' : 'var(--border-color)',
+                            padding: '12px 14px'
+                          }}
+                        >
+                          <div className="profile-avatar" style={{ background: app.status === 'running' ? 'var(--success-color)' : 'rgba(255,255,255,0.05)' }}>
+                            <IconBox size={18} />
+                          </div>
+                          <div className="profile-info">
+                            <span className="profile-name">{app.name}</span>
+                            <span className="profile-email" style={{ 
+                              color: app.status === 'running' ? 'var(--success-color)' : app.status === 'stopped' ? 'var(--text-muted)' : 'var(--warning-color)',
+                              fontWeight: 600,
+                              fontSize: '10px',
+                              display: 'flex',
+                              alignItems: 'center',
+                              gap: '4px'
+                            }}>
+                              <span style={{ 
+                                width: '6px', 
+                                height: '6px', 
+                                borderRadius: '50%', 
+                                background: app.status === 'running' ? 'var(--success-color)' : app.status === 'stopped' ? 'var(--text-muted)' : 'var(--warning-color)',
+                                display: 'inline-block'
+                              }} />
+                              {app.status === 'running' ? t('statusRunning') : app.status === 'stopped' ? t('statusStopped') : t('statusNotConfigured')}
+                            </span>
+                          </div>
+                        </div>
+                      ))}
+                  </div>
+                </div>
+
+                <div>
+                  {selectedApp ? (
+                    <div style={{ background: 'var(--bg-panel)', border: '1px solid var(--border-color)', borderRadius: '16px', padding: '24px', backdropFilter: 'blur(20px)', height: '100%', display: 'flex', flexDirection: 'column', justifyContent: 'space-between', gap: '20px' }}>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '20px', flex: 1, overflowY: 'auto' }}>
+                        {/* Header */}
+                        <div style={{ display: 'flex', gap: '16px', alignItems: 'center' }}>
+                          <div style={{ 
+                            width: '56px', 
+                            height: '56px', 
+                            borderRadius: '14px', 
+                            background: selectedApp.status === 'running' ? 'rgba(16, 185, 129, 0.15)' : 'rgba(255,255,255,0.03)',
+                            border: selectedApp.status === 'running' ? '1px solid rgba(16, 185, 129, 0.3)' : '1px solid var(--border-color)',
+                            display: 'flex', 
+                            alignItems: 'center', 
+                            justifyContent: 'center',
+                            color: selectedApp.status === 'running' ? 'var(--success-color)' : 'var(--accent-gold)'
+                          }}>
+                            <IconBox size={28} />
+                          </div>
+                          <div style={{ flex: 1 }}>
+                            <h3 style={{ fontSize: '20px', fontWeight: '700', color: 'white', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                              {selectedApp.name}
+                            </h3>
+                            <span style={{ 
+                              fontSize: '11px', 
+                              color: selectedApp.status === 'running' ? 'var(--success-color)' : selectedApp.status === 'stopped' ? 'var(--text-muted)' : 'var(--warning-color)',
+                              fontWeight: '600',
+                              display: 'flex',
+                              alignItems: 'center',
+                              gap: '6px',
+                              marginTop: '2px'
+                            }}>
+                              <span style={{ 
+                                width: '6px', 
+                                height: '6px', 
+                                borderRadius: '50%', 
+                                background: selectedApp.status === 'running' ? 'var(--success-color)' : selectedApp.status === 'stopped' ? 'var(--text-muted)' : 'var(--warning-color)',
+                                display: 'inline-block'
+                              }} />
+                              {selectedApp.status === 'running' ? t('statusRunning') : selectedApp.status === 'stopped' ? t('statusInstalled') : t('statusNotInstalled')}
+                            </span>
+                          </div>
+                        </div>
+
+                        {/* Onboarding View for Not Configured status */}
+                        {selectedApp.status === 'not_configured' ? (
+                          <div style={{ 
+                            background: 'rgba(255,255,255,0.01)', 
+                            border: '1px dashed var(--border-color)', 
+                            borderRadius: '12px', 
+                            padding: '24px', 
+                            textAlign: 'center',
+                            display: 'flex',
+                            flexDirection: 'column',
+                            alignItems: 'center',
+                            gap: '12px',
+                            margin: '10px 0'
+                          }}>
+                            <IconFingerprint size={40} style={{ color: 'var(--accent-gold)', opacity: 0.6 }} />
+                            <h4 style={{ fontSize: '15px', fontWeight: '700', color: 'white' }}>{t('onboardingConfigTitle')}</h4>
+                            <p style={{ fontSize: '13px', color: 'var(--text-muted)', lineHeight: '1.5', maxWidth: '360px' }}>
+                              {t('onboardingConfigDesc')}
+                            </p>
+                            
+                            {selectedApp.isInstalling && (
+                              <div style={{ width: '100%', marginTop: '10px' }}>
+                                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '11px', marginBottom: '6px', color: 'var(--text-muted)' }}>
+                                  <span>{t('initializingProfile')}</span>
+                                  <span>{selectedApp.installProgress}%</span>
+                                </div>
+                                <div className="timeline-track" style={{ height: '6px' }}>
+                                  <div className="timeline-fill" style={{ width: `${selectedApp.installProgress}%`, background: 'var(--accent-gold)' }} />
+                                </div>
+                              </div>
+                            )}
+
+                            <button 
+                              className="btn btn-primary" 
+                              disabled={selectedApp.isInstalling}
+                              onClick={() => handleInstallApp(selectedApp.id)}
+                              style={{ marginTop: '8px', padding: '10px 24px', fontSize: '13px', display: 'flex', alignItems: 'center', gap: '8px' }}
+                            >
+                              {selectedApp.isInstalling ? <IconLoader2 size={16} className="animate-spin" /> : <IconPlus size={16} />}
+                              <span>{selectedApp.isInstalling ? t('configuringStatus') : t('btnInitializeProfile')}</span>
+                            </button>
+                          </div>
+                        ) : (
+                          /* Interactive App Launcher Card */
+                          <div 
+                            onClick={() => selectedApp.status === 'stopped' && handleLaunchApp(selectedApp.id)}
+                            onMouseEnter={() => selectedApp.status === 'stopped' && setIsCardHovered(true)}
+                            onMouseLeave={() => setIsCardHovered(false)}
+                            style={{ 
+                              background: selectedApp.status === 'running' ? 'rgba(16, 185, 129, 0.03)' : 'rgba(255,255,255,0.02)', 
+                              border: selectedApp.status === 'running' ? '1px solid rgba(16, 185, 129, 0.2)' : '1px solid var(--border-color)', 
+                              borderRadius: '12px', 
+                              padding: '24px 20px', 
+                              textAlign: 'center',
+                              cursor: selectedApp.status === 'stopped' ? 'pointer' : 'default',
+                              transition: 'all 0.2s ease',
+                              transform: (selectedApp.status === 'stopped' && isCardHovered) ? 'translateY(-2px)' : 'none',
+                              boxShadow: (selectedApp.status === 'stopped' && isCardHovered) ? '0 8px 24px rgba(212, 175, 55, 0.1)' : 'none',
+                              display: 'flex',
+                              flexDirection: 'column',
+                              alignItems: 'center',
+                              gap: '12px'
+                            }}
+                          >
+                            <div style={{ 
+                              width: '48px', 
+                              height: '48px', 
+                              borderRadius: '50%', 
+                              background: selectedApp.status === 'running' ? 'var(--success-color)' : 'rgba(255,255,255,0.05)',
+                              display: 'flex',
+                              alignItems: 'center',
+                              justifyContent: 'center',
+                              color: selectedApp.status === 'running' ? 'white' : 'var(--text-muted)',
+                              transition: 'all 0.2s ease'
+                            }}>
+                              {selectedApp.status === 'running' ? <IconCheck size={24} /> : <IconPlayerPlay size={24} />}
+                            </div>
+                            <div>
+                              <span style={{ fontSize: '14px', fontWeight: '600', color: 'white' }}>
+                                {selectedApp.status === 'running' ? t('runningSecureSandbox') : t('clickLaunchContainer')}
+                              </span>
+                              <p style={{ fontSize: '12px', color: 'var(--text-muted)', marginTop: '4px' }}>{selectedApp.description}</p>
+                            </div>
+                          </div>
+                        )}
+
+                        {/* Session Sync Info Note */}
+                        {selectedApp.status !== 'not_configured' && (
+                          <div style={{
+                            background: 'rgba(212, 175, 55, 0.05)',
+                            border: '1px solid rgba(212, 175, 55, 0.15)',
+                            borderRadius: '12px',
+                            padding: '14px 16px',
+                            display: 'flex',
+                            gap: '12px',
+                            alignItems: 'start',
+                            marginTop: '12px'
+                          }}>
+                            <IconInfoCircle className="gold-icon" size={20} style={{ flexShrink: 0, marginTop: '2px' }} />
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                              <span style={{ fontSize: '12px', fontWeight: '700', color: 'var(--accent-gold)' }}>
+                                {t('warningDedicatedWorkspace')}
+                              </span>
+                              <p style={{ fontSize: '11px', color: 'var(--text-muted)', margin: 0, lineHeight: 1.4 }}>
+                                {t('warningWorkspaceDesc')}
+                              </p>
+                            </div>
+                          </div>
+                        )}
+
+                        {/* Profile Sync Controls */}
+                        {selectedApp.status !== 'not_configured' && (
+                          <div style={{
+                            background: 'rgba(255, 255, 255, 0.02)',
+                            border: '1px solid var(--border-color)',
+                            borderRadius: '12px',
+                            padding: '16px',
+                            display: 'flex',
+                            flexDirection: 'column',
+                            gap: '12px',
+                            marginTop: '12px'
+                          }}>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                              <span style={{ fontSize: '13px', fontWeight: 'bold', color: 'white' }}>
+                                {t('syncSectionTitle')}
+                              </span>
+                              <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
+                                {t('lastSyncedLabel')}: {syncStatus[selectedApp.id] || t('neverSynced')}
+                              </span>
+                            </div>
+                            <p style={{ fontSize: '11px', color: 'var(--text-muted)', margin: 0, lineHeight: 1.4 }}>
+                              {t('syncSectionDesc')}
+                            </p>
+                            <div style={{ display: 'flex', gap: '10px' }}>
+                              <button
+                                className="btn btn-secondary"
+                                onClick={() => handleSyncProfile(selectedApp.id, selectedApp.url, 'import')}
+                                disabled={isSyncing[selectedApp.id]}
+                                style={{ flex: 1, padding: '8px 12px', fontSize: '11px', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '4px' }}
+                              >
+                                {isSyncing[selectedApp.id] ? <IconLoader2 size={14} className="animate-spin" /> : <IconDownload size={14} />}
+                                <span style={{ whiteSpace: 'nowrap' }}>{t('btnImportFromChrome')}</span>
+                              </button>
+                              <button
+                                className="btn btn-secondary"
+                                onClick={() => handleSyncProfile(selectedApp.id, selectedApp.url, 'export')}
+                                disabled={isSyncing[selectedApp.id]}
+                                style={{ flex: 1, padding: '8px 12px', fontSize: '11px', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '4px' }}
+                              >
+                                <IconUpload size={14} />
+                                <span style={{ whiteSpace: 'nowrap' }}>{t('btnExportBackup')}</span>
+                              </button>
+                              <button
+                                className="btn btn-secondary"
+                                onClick={() => handleSyncProfile(selectedApp.id, selectedApp.url, 'restore')}
+                                disabled={isSyncing[selectedApp.id]}
+                                style={{ flex: 1, padding: '8px 12px', fontSize: '11px', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '4px' }}
+                              >
+                                <IconHistory size={14} />
+                                <span style={{ whiteSpace: 'nowrap' }}>{t('btnRestoreBackup')}</span>
+                              </button>
+                            </div>
+                          </div>
+                        )}
+
+                        {/* Collapsible Advanced Developer Options */}
+                        {selectedApp.status !== 'not_configured' && (
+                          <div style={{ marginTop: '10px', borderTop: '1px solid var(--border-color)', paddingTop: '16px' }}>
+                            <div 
+                              onClick={() => setShowDevOptions(!showDevOptions)}
+                              style={{ 
+                                display: 'flex', 
+                                justifyContent: 'space-between', 
+                                alignItems: 'center', 
+                                cursor: 'pointer',
+                                padding: '4px 0',
+                                color: 'var(--text-muted)',
+                                fontSize: '12px',
+                                fontWeight: 'bold'
+                              }}
+                            >
+                              <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                                <IconTerminal size={14} />
+                                <span>{showDevOptions ? t('hideActiveSettings') : t('showContainerConfig')}</span>
+                              </div>
+                              <span style={{ fontSize: '10px' }}>{showDevOptions ? '▲' : '▼'}</span>
+                            </div>
+
+                            {showDevOptions && (
+                              <div style={{ marginTop: '12px', display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                                <div style={{ background: 'rgba(0,0,0,0.15)', borderRadius: '8px', padding: '12px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '11px' }}>
+                                    <span style={{ color: 'var(--text-muted)' }}>{t('targetUrlLabel')}:</span>
+                                    <span style={{ fontFamily: 'monospace', color: 'var(--accent-gold)' }}>{selectedApp.url}</span>
+                                  </div>
+                                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '11px' }}>
+                                    <span style={{ color: 'var(--text-muted)' }}>{t('storagePathLabel')}:</span>
+                                    <span style={{ fontFamily: 'monospace', color: 'white' }}>~/.local/share/uid/apps/{selectedApp.id}</span>
+                                  </div>
+                                </div>
+
+                                <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                                  <span style={{ fontSize: '11px', color: 'var(--text-muted)', fontWeight: 'bold', textTransform: 'uppercase' }}>{t('consoleLogOutput')}</span>
+                                  <div style={{ 
+                                    background: 'rgba(0,0,0,0.3)', 
+                                    border: '1px solid var(--border-color)', 
+                                    borderRadius: '8px', 
+                                    padding: '10px', 
+                                    fontFamily: 'monospace', 
+                                    fontSize: '11px', 
+                                    color: 'var(--accent-gold)', 
+                                    height: '120px', 
+                                    overflowY: 'auto',
+                                    display: 'flex',
+                                    flexDirection: 'column',
+                                    gap: '4px'
+                                  }}>
+                                    {selectedApp.logs.map((l, i) => <div key={i}>{l}</div>)}
+                                  </div>
+                                </div>
+                              </div>
+                            )}
+                          </div>
+                        )}
+                      </div>
+
+                      {/* Footer Actions */}
+                      {selectedApp.status !== 'not_configured' && (
+                        <div style={{ display: 'flex', gap: '12px', borderTop: '1px solid var(--border-color)', paddingTop: '20px', marginTop: '10px' }}>
+                          {selectedApp.status === 'stopped' ? (
+                            <>
+                              <button 
+                                className="btn btn-primary" 
+                                onClick={() => handleLaunchApp(selectedApp.id)}
+                                style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px' }}
+                              >
+                                <IconPlayerPlay size={16} />
+                                <span>{t('btnLaunchWorkspace')}</span>
+                              </button>
+                              <button 
+                                className="btn btn-secondary" 
+                                onClick={() => {
+                                  setSandboxApps(prev => prev.map(app => app.id === selectedApp.id ? { ...app, status: 'not_configured' as const, logs: [] } : app));
+                                  setSelectedApp(prev => prev ? { ...prev, status: 'not_configured' as const, logs: [] } : null);
+                                }}
+                                style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px' }}
+                              >
+                                <IconTrash size={16} />
+                                <span>{t('btnResetStorage')}</span>
+                              </button>
+                            </>
+                          ) : (
+                            <>
+                              <button 
+                                className="btn btn-secondary" 
+                                onClick={() => handleStopApp(selectedApp.id)}
+                                style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px', border: '1px solid rgba(239, 68, 68, 0.3)', color: 'var(--danger-color)' }}
+                              >
+                                <IconPlayerStop size={16} />
+                                <span>{t('btnStopSandbox')}</span>
+                              </button>
+                              <button 
+                                className="btn btn-secondary" 
+                                onClick={() => handlePinApp(selectedApp.id)}
+                                style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px' }}
+                              >
+                                <IconPin size={16} />
+                                <span>{t('btnPinShortcut')}</span>
+                              </button>
+                            </>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  ) : (
+                    <div className="empty-state" style={{ height: '100%', display: 'flex', justifyContent: 'center' }}>
+                      <IconBox size={48} className="gold-icon" style={{ opacity: 0.5 }} />
+                      <p>Select an Application</p>
+                      <span>Choose an app from the list to launch its secure workspace.</span>
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+          )}
+
+          {activeTab === 'approvals' && (
+            <div className="tab-pane">
+              <h2 className="section-title">{t('approvalsTitle')}</h2>
+              <p className="section-subtitle">{t('approvalsSubtitle')}</p>
+
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '20px', marginTop: '24px' }}>
+                <h4 style={{ color: 'var(--accent-gold)', fontSize: '13px', fontWeight: '700', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
+                  {t('pendingRequestsTitle')}
+                </h4>
+
+                {pendingApprovals.length > 0 ? (
+                  pendingApprovals.map(req => (
+                    <div 
+                      key={req.id} 
+                      style={{ 
+                        background: 'var(--bg-panel)', 
+                        border: '1px solid var(--border-color)', 
+                        borderRadius: '16px', 
+                        padding: '24px', 
+                        backdropFilter: 'blur(20px)',
+                        display: 'flex',
+                        flexDirection: 'column',
+                        gap: '16px',
+                        position: 'relative',
+                        overflow: 'hidden'
+                      }}
+                    >
+                      {req.isSuccess && (
+                        <div style={{ 
+                          position: 'absolute', 
+                          top: 0, 
+                          left: 0, 
+                          right: 0, 
+                          bottom: 0, 
+                          background: 'rgba(16, 185, 129, 0.9)', 
+                          display: 'flex', 
+                          alignItems: 'center', 
+                          justifyContent: 'center',
+                          zIndex: 10,
+                          backdropFilter: 'blur(4px)',
+                          animation: 'fadeIn 0.2s ease'
+                        }}>
+                          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '8px', color: 'white' }}>
+                            <IconCheck size={40} style={{ border: '2px solid white', borderRadius: '50%', padding: '4px' }} />
+                            <span style={{ fontWeight: 'bold', fontSize: '16px' }}>{t('attestationSignedSuccess')}</span>
+                          </div>
+                        </div>
+                      )}
+
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+                        <div>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                            <span style={{ 
+                              background: req.type === 'login' ? 'rgba(37, 99, 255, 0.15)' : 'rgba(212, 175, 55, 0.15)', 
+                              border: req.type === 'login' ? '1px solid rgba(37, 99, 255, 0.3)' : '1px solid rgba(212, 175, 55, 0.3)',
+                              color: req.type === 'login' ? '#3b82f6' : 'var(--color-primary)',
+                              fontSize: '10px',
+                              fontWeight: '700',
+                              padding: '2px 8px',
+                              borderRadius: '20px',
+                              textTransform: 'uppercase'
+                            }}>
+                              {req.type === 'login' ? t('authLoginType') : t('digitalSignType')}
+                            </span>
+                            <span style={{ fontSize: '12px', color: 'var(--text-muted)' }}>{req.timestamp}</span>
+                          </div>
+                          <h3 style={{ fontSize: '18px', fontWeight: '700', color: 'white', marginTop: '10px' }}>{req.title}</h3>
+                          <p style={{ fontSize: '14px', color: 'var(--text-secondary)', marginTop: '4px' }}>{req.description}</p>
+                        </div>
+                        <span style={{ fontSize: '12px', color: 'var(--text-muted)', fontFamily: 'monospace' }}>{req.origin}</span>
+                      </div>
+
+                      <div style={{ background: 'rgba(0,0,0,0.2)', border: '1px solid var(--border-color)', borderRadius: '8px', padding: '12px', display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                        <span style={{ fontSize: '11px', color: 'var(--text-muted)', fontWeight: 'bold' }}>{t('challengePayloadLabel')}</span>
+                        <code style={{ fontFamily: 'monospace', fontSize: '12px', color: 'var(--accent-gold)', wordBreak: 'break-all' }}>{req.payload}</code>
+                      </div>
+
+                      <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '12px' }}>
+                        <button 
+                          className="btn btn-secondary" 
+                          onClick={() => handleRejectRequest(req.id)}
+                          disabled={req.isSigning}
+                          style={{ padding: '8px 20px', fontSize: '13px' }}
+                        >
+                          {t('btnReject')}
+                        </button>
+                        <button 
+                          className="btn btn-primary" 
+                          onClick={() => handleApproveRequest(req.id)}
+                          disabled={req.isSigning}
+                          style={{ padding: '8px 24px', fontSize: '13px', display: 'flex', alignItems: 'center', gap: '8px' }}
+                        >
+                          {req.isSigning ? <IconLoader2 size={16} className="animate-spin" /> : <IconFingerprint size={16} />}
+                          <span>{req.isSigning ? t('btnVerifying') : t('btnApproveSign')}</span>
+                        </button>
+                      </div>
+                    </div>
+                  ))
+                ) : (
+                  <div className="empty-state" style={{ padding: '48px 24px' }}>
+                    <IconFingerprint size={48} className="green-icon" style={{ opacity: 0.8 }} />
+                    <p style={{ color: 'var(--success-color)' }}>{t('emptyApprovalsTitle')}</p>
+                    <span>{t('emptyApprovalsDesc')}</span>
+                  </div>
+                )}
+
+                <h4 style={{ color: 'var(--text-muted)', fontSize: '13px', fontWeight: '700', textTransform: 'uppercase', letterSpacing: '0.5px', marginTop: '24px' }}>
+                  {t('sigHistoryTitle')}
+                </h4>
+                <p className="section-subtitle" style={{ marginBottom: '16px' }}>{t('sigHistorySubtitle')}</p>
+
+                <div className="sig-history-card" style={{ background: 'var(--bg-panel)', border: '1px solid var(--border-color)', borderRadius: '16px', overflow: 'hidden' }}>
+                  {sigHistory.length > 0 ? (
+                    <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '13px', textAlign: 'left' }}>
+                      <thead>
+                        <tr style={{ background: 'rgba(255,255,255,0.02)', borderBottom: '1px solid var(--border-color)' }}>
+                          <th style={{ padding: '12px 16px', color: 'var(--text-muted)', fontWeight: 'bold' }}>{t('historyColTime')}</th>
+                          <th style={{ padding: '12px 16px', color: 'var(--text-muted)', fontWeight: 'bold' }}>{t('historyColApp')}</th>
+                          <th style={{ padding: '12px 16px', color: 'var(--text-muted)', fontWeight: 'bold' }}>{t('historyColCert')}</th>
+                          <th style={{ padding: '12px 16px', color: 'var(--text-muted)', fontWeight: 'bold' }}>{t('historyColHash')}</th>
+                          <th style={{ padding: '12px 16px', color: 'var(--text-muted)', fontWeight: 'bold' }}>{t('historyColStatus')}</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {sigHistory.map((hist, index) => (
+                          <tr key={index} style={{ borderBottom: index < sigHistory.length - 1 ? '1px solid var(--border-color)' : 'none' }}>
+                            <td style={{ padding: '12px 16px', color: 'var(--text-muted)' }}>{new Date(hist.timestamp).toLocaleTimeString()}</td>
+                            <td style={{ padding: '12px 16px', fontWeight: '600' }}>{hist.origin || 'Local System'}</td>
+                            <td style={{ padding: '12px 16px', color: 'var(--text-secondary)' }}>{hist.subject || 'Attested Key'}</td>
+                            <td style={{ padding: '12px 16px' }}><code style={{ color: 'var(--accent-gold)', fontSize: '11px' }}>{hist.hash.substring(0, 16)}...</code></td>
+                            <td style={{ padding: '12px 16px' }}><span style={{ color: 'var(--success-color)', fontWeight: 'bold' }}>{hist.status}</span></td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  ) : (
+                    <div style={{ padding: '24px', textAlign: 'center', color: 'var(--text-muted)' }}>{t('noHistory')}</div>
+                  )}
+                </div>
+              </div>
             </div>
           )}
         </main>
@@ -1046,6 +2077,57 @@ export default function App() {
         </div>
       )}
 
+      {showAddAppModal && (
+        <div className="modal-overlay">
+          <div className="modal-content glassmorphism" style={{ maxWidth: '500px', width: '90%' }}>
+            <div className="modal-header">
+              <h3>{t('addAppModalTitle')}</h3>
+              <button className="close-modal-btn" onClick={() => setShowAddAppModal(false)}>
+                <IconX size={20} />
+              </button>
+            </div>
+            
+            <div className="modal-body" style={{ color: 'var(--text-secondary)', padding: '16px 0', fontSize: '14px', display: 'flex', flexDirection: 'column', gap: '16px' }}>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                <label style={{ fontSize: '12px', fontWeight: '600', color: 'var(--text-primary)' }}>{t('appNameLabel')}</label>
+                <input 
+                  type="text" 
+                  placeholder={t('appNamePlaceholder')}
+                  value={newAppName}
+                  onChange={(e) => setNewAppName(e.target.value)}
+                  className="settings-select"
+                  style={{ width: '100%', padding: '10px 12px', fontSize: '13px' }}
+                />
+              </div>
+
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                <label style={{ fontSize: '12px', fontWeight: '600', color: 'var(--text-primary)' }}>{t('appWebUrlLabel')}</label>
+                <input 
+                  type="text" 
+                  placeholder="https://example.com"
+                  value={newAppUrl}
+                  onChange={(e) => setNewAppUrl(e.target.value)}
+                  className="settings-select"
+                  style={{ width: '100%', padding: '10px 12px', fontSize: '13px' }}
+                />
+              </div>
+            </div>
+
+            <div className="modal-actions" style={{ borderTop: '1px solid var(--border-color)', paddingTop: '16px', display: 'flex', justifyContent: 'flex-end', gap: '12px' }}>
+              <button className="btn btn-secondary" onClick={() => setShowAddAppModal(false)}>
+                {t('btnCancel')}
+              </button>
+              <button 
+                className="btn btn-primary" 
+                onClick={handleAddCustomApp}
+                disabled={!newAppName.trim() || !newAppUrl.trim()}
+              >
+                {t('btnSaveInstall')}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
