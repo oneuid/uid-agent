@@ -1106,7 +1106,7 @@ async fn check_for_updates() -> Result<String, String> {
     #[cfg(target_os = "windows")]
     {
         let msi_url = format!(
-            "https://github.com/oneuid/uid-agent/releases/download/v{}/uid-agent-desktop_{}_x64_en-US.msi",
+            "https://github.com/oneuid/uid-agent/releases/download/v{}/UID%20Agent_{}_x64_en-US.msi",
             latest_version, latest_version
         );
         let script = format!(
