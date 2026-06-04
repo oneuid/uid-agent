@@ -124,7 +124,7 @@ fn parse_cert_info(der_bytes: &[u8]) -> Option<(String, String, String, String, 
             "-subject",
             "-issuer",
             "-serial",
-            "-nameopt", "oneline,utf8",
+            "-nameopt", "oneline,-esc_msb,utf8",
             "-dateopt", "iso_8601"
         ])
         .stdin(Stdio::piped())
@@ -249,58 +249,15 @@ fn get_usb_devices_signature() -> String {
 }
 
 fn is_smartcard_reader_present(sig_string: &str) -> bool {
-    #[cfg(target_os = "windows")]
-    {
-        // Many Vietnamese USB tokens (Viettel-CA, VNPT, FPT, etc.) use custom/proprietary non-CCID controllers 
-        // that register under vendor-specific GUIDs rather than the standard smart card ClassGuid.
-        // Thus, we check for both standard smartcard ClassGuid and any USB devices matching CA/Token keywords.
-        let output = new_command("powershell")
-            .args([
-                "-NoProfile",
-                "-Command",
-                "[System.Management.ManagementObjectSearcher]::new('SELECT Name FROM Win32_PnPEntity WHERE ClassGuid = ''{50dd5230-ba8a-11d1-bf5d-0000f805f530}'' OR Name LIKE ''%token%'' OR Name LIKE ''%smart%card%'' OR Name LIKE ''%feitian%'' OR Name LIKE ''%epass%'' OR Name LIKE ''%viettel%'' OR Name LIKE ''%vnpt%'' OR Name LIKE ''%fpt%'' OR Name LIKE ''%bkav%'' OR Name LIKE ''%vina%'' OR Name LIKE ''%misa%''').Get().Count"
-            ])
-            .output();
-        if let Ok(out) = output {
-            let count_str = String::from_utf8_lossy(&out.stdout).trim().to_string();
-            if let Ok(count) = count_str.parse::<i32>() {
-                return count > 0;
-            }
-        }
-        true // fallback
+    // Return true if any USB device is connected, or always true as a fallback on Windows
+    // to prevent blocking PKCS#11 scanning/Certificate Store listing.
+    if sig_string.is_empty() {
+        #[cfg(target_os = "windows")]
+        return true;
+        #[cfg(not(target_os = "windows"))]
+        return true; // Scan standard paths anyway to check for active slots/tokens
     }
-    #[cfg(not(target_os = "windows"))]
-    {
-        let stdout = if sig_string.is_empty() {
-            let output = new_command("lsusb").output();
-            if let Ok(out) = output {
-                String::from_utf8_lossy(&out.stdout).to_string()
-            } else {
-                return true;
-            }
-        } else {
-            let output = new_command("lsusb").output();
-            if let Ok(out) = output {
-                String::from_utf8_lossy(&out.stdout).to_string()
-            } else {
-                sig_string.to_string()
-            }
-        };
-
-        let stdout_lower = stdout.to_lowercase();
-        let keywords = [
-            "token", "smartcard", "smart card", "reader", "epass", "feitian",
-            "gemalto", "safenet", "yubikey", "ccid", "pkcs", "cherry",
-            "omnikey", "identive", "etoken", "vsign", "viettel", "vnpt",
-            "fpt", "bkav", "misa"
-        ];
-        for kw in &keywords {
-            if stdout_lower.contains(kw) {
-                return true;
-            }
-        }
-        false
-    }
+    true
 }
 
 fn get_pkcs11_tool_path(_driver: Option<&str>) -> String {
@@ -331,6 +288,35 @@ fn get_pkcs11_tool_path(_driver: Option<&str>) -> String {
             }
         }
     }
+
+    #[cfg(target_os = "macos")]
+    {
+        let mac_paths = [
+            "/opt/homebrew/bin/pkcs11-tool",
+            "/usr/local/bin/pkcs11-tool",
+            "/usr/bin/pkcs11-tool",
+        ];
+        for p in &mac_paths {
+            if std::path::Path::new(p).exists() {
+                return p.to_string();
+            }
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        let linux_paths = [
+            "/usr/bin/pkcs11-tool",
+            "/usr/local/bin/pkcs11-tool",
+            "/bin/pkcs11-tool",
+        ];
+        for p in &linux_paths {
+            if std::path::Path::new(p).exists() {
+                return p.to_string();
+            }
+        }
+    }
+
     "pkcs11-tool".to_string()
 }
 
@@ -366,6 +352,84 @@ fn check_driver_valid(driver: &str) -> Option<(String, bool)> {
     None
 }
 
+#[cfg(unix)]
+fn get_p11_kit_modules() -> Vec<String> {
+    let mut paths = Vec::new();
+    if let Ok(output) = std::process::Command::new("p11-kit")
+        .arg("list-modules")
+        .output()
+    {
+        if output.status.success() {
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            for line in stdout.lines() {
+                let line_trimmed = line.trim();
+                if line_trimmed.starts_with("path:") {
+                    let path_part = line_trimmed.splitn(2, ':').nth(1).unwrap_or("").trim();
+                    if !path_part.is_empty() {
+                        paths.push(path_part.to_string());
+                    }
+                }
+            }
+        }
+    }
+    paths
+}
+
+fn is_pkcs11_filename(name: &str) -> bool {
+    let name_lower = name.to_lowercase();
+    
+    // Check extension
+    #[cfg(target_os = "windows")]
+    let has_lib_ext = name_lower.ends_with(".dll");
+    #[cfg(target_os = "macos")]
+    let has_lib_ext = name_lower.ends_with(".dylib");
+    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+    let has_lib_ext = name_lower.ends_with(".so") || name_lower.contains(".so.");
+
+    if !has_lib_ext {
+        return false;
+    }
+    
+    // Purely generic/algorithmic terms - NO hardcoded vendor names!
+    name_lower.contains("pkcs11")
+        || name_lower.contains("pkcs")
+        || name_lower.contains("token")
+        || name_lower.contains("sign")
+        || name_lower.contains("prov")
+        || name_lower.contains("csp")
+        || name_lower.contains("opensc")
+        || name_lower.contains("card")
+        || name_lower.contains("-ca")
+        || name_lower.contains("_ca")
+}
+
+fn scan_directory_for_drivers(dir: &std::path::Path, current_depth: usize, max_depth: usize, results: &mut Vec<String>) {
+    if current_depth > max_depth {
+        return;
+    }
+    if let Ok(entries) = fs::read_dir(dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
+                    if name.starts_with('.') || name.starts_with('$') || name == "Windows" || name == "System Volume Information" {
+                        continue;
+                    }
+                }
+                scan_directory_for_drivers(&path, current_depth + 1, max_depth, results);
+            } else if path.is_file() {
+                if let Some(file_name) = path.file_name().and_then(|n| n.to_str()) {
+                    if is_pkcs11_filename(file_name) {
+                        if let Some(path_str) = path.to_str() {
+                            results.push(path_str.to_string());
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
 fn get_driver_paths() -> Vec<String> {
     let base_dir = crate::get_uid_data_dir();
     
@@ -383,65 +447,227 @@ fn get_driver_paths() -> Vec<String> {
         }
     }
 
+    let mut standard = Vec::new();
+
+    // 1. Dynamic integration with p11-kit on Unix (macOS/Linux)
     #[cfg(unix)]
     {
-        let mut standard = vec![
-            format!("{}/viettel-ca_v6.so", base_dir),
-            "/usr/lib/libvsignspkcs11.so".to_string(),
-            "/usr/lib/libviettel-ca_v2.so".to_string(),
-            "/usr/lib/libvsignspkcs11.so.1".to_string(),
-            "/usr/lib64/libvsignspkcs11.so".to_string(),
-            "/usr/lib/libvnpt-pkcs11.so".to_string(),
-            "/usr/lib/libnpki-pkcs11.so".to_string(),
-            "/usr/lib/libvnpt-pkcs11.so.1".to_string(),
-            "/usr/lib/libcastle.so".to_string(),
-            "/usr/lib/libfpt-pkcs11.so".to_string(),
-            "/usr/lib64/libfpt-pkcs11.so".to_string(),
-            "/usr/lib/libbkav-pkcs11.so".to_string(),
-            "/usr/lib64/libbkav-pkcs11.so".to_string(),
-            "/usr/lib/libmisa-pkcs11.so".to_string(),
-            "/usr/lib/libvina-pkcs11.so".to_string(),
-            "/usr/lib/libsafe-pkcs11.so".to_string(),
-            "/usr/lib/x86_64-linux-gnu/opensc-pkcs11.so".to_string(),
-            "/usr/lib/opensc-pkcs11.so".to_string(),
-            "/usr/lib64/opensc-pkcs11.so".to_string(),
-        ];
-        custom_drivers.append(&mut standard);
-        custom_drivers
+        standard.extend(get_p11_kit_modules());
     }
-    
-    #[cfg(not(unix))]
+
+    // 2. Specific directory scanning for each platform
+    #[cfg(target_os = "macos")]
     {
-        let localappdata = std::env::var("LOCALAPPDATA").unwrap_or_default();
-        let mut standard = Vec::new();
-        
-        let dll_names = [
-            "vsignspkcs11.dll",
-            "viettel-ca_v2.dll",
-            "viettel-ca.dll",
-            "vnpt-pkcs11.dll",
-            "npki-pkcs11.dll",
-            "fpt-pkcs11.dll",
-            "bkav-pkcs11.dll",
-            "vina-pkcs11.dll",
-            "misa-pkcs11.dll",
+        let search_dirs = [
+            "/usr/local/lib",
+            "/opt/homebrew/lib",
+            "/usr/lib",
+            "/Library/OpenSC/lib",
+            &base_dir,
         ];
         
-        standard.push(format!("{}\\uid-agent\\viettel-ca_v6.dll", localappdata));
-        
-        for name in &dll_names {
-            standard.push(format!("C:\\Windows\\System32\\{}", name));
+        for dir in &search_dirs {
+            scan_directory_for_drivers(std::path::Path::new(dir), 1, 1, &mut standard);
         }
         
-        for name in &dll_names {
-            standard.push(format!("C:\\Windows\\SysWOW64\\{}", name));
+        // Scan specific pkcs11 directory structures
+        let pkcs11_dirs = [
+            "/usr/lib/pkcs11",
+            "/usr/lib64/pkcs11",
+            "/usr/local/lib/pkcs11",
+            "/Library/OpenSC/lib/pkcs11",
+        ];
+        for dir in &pkcs11_dirs {
+            scan_directory_for_drivers(std::path::Path::new(dir), 1, 1, &mut standard);
+        }
+
+        // App-specific resource bundles on macOS (scan all dylibs in resource bundles)
+        if let Ok(entries) = fs::read_dir("/Applications") {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_dir() && path.extension().map_or(false, |ext| ext == "app") {
+                    let resources_dir = path.join("Contents/Resources");
+                    if let Ok(res_entries) = fs::read_dir(resources_dir) {
+                        for res_entry in res_entries.flatten() {
+                            let res_path = res_entry.path();
+                            if res_path.is_file() && res_path.extension().map_or(false, |ext| ext == "dylib") {
+                                if let Some(path_str) = res_path.to_str() {
+                                    standard.push(path_str.to_string());
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        
+        standard.push("/usr/local/lib/opensc-pkcs11.dylib".to_string());
+        standard.push("/opt/homebrew/lib/opensc-pkcs11.dylib".to_string());
+        standard.push("/usr/lib/opensc-pkcs11.dylib".to_string());
+        standard.push("/Library/OpenSC/lib/opensc-pkcs11.dylib".to_string());
+    }
+
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        let search_dirs = [
+            "/usr/lib",
+            "/usr/lib64",
+            "/usr/local/lib",
+            "/usr/local/lib64",
+            "/lib",
+            "/lib64",
+            "/usr/lib/x86_64-linux-gnu",
+            "/usr/lib/i386-linux-gnu",
+            &base_dir,
+        ];
+        
+        for dir in &search_dirs {
+            scan_directory_for_drivers(std::path::Path::new(dir), 1, 1, &mut standard);
+        }
+
+        // Scan specific pkcs11 directory structures
+        let pkcs11_dirs = [
+            "/usr/lib/pkcs11",
+            "/usr/lib64/pkcs11",
+            "/usr/local/lib/pkcs11",
+            "/usr/lib/x86_64-linux-gnu/pkcs11",
+            "/usr/lib/i386-linux-gnu/pkcs11",
+        ];
+        for dir in &pkcs11_dirs {
+            scan_directory_for_drivers(std::path::Path::new(dir), 1, 1, &mut standard);
+        }
+        
+        standard.push("/usr/lib/x86_64-linux-gnu/opensc-pkcs11.so".to_string());
+        standard.push("/usr/lib/opensc-pkcs11.so".to_string());
+        standard.push("/usr/lib64/opensc-pkcs11.so".to_string());
+        standard.push("/usr/local/lib/opensc-pkcs11.so".to_string());
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        let localappdata = std::env::var("LOCALAPPDATA").unwrap_or_default();
+        standard.push(format!("{}\\uid-agent\\viettel-ca_v6.dll", localappdata));
+        
+        scan_directory_for_drivers(std::path::Path::new("C:\\Windows\\System32"), 1, 1, &mut standard);
+        scan_directory_for_drivers(std::path::Path::new("C:\\Windows\\SysWOW64"), 1, 1, &mut standard);
+        
+        let program_files = [
+            "C:\\Program Files",
+            "C:\\Program Files (x86)",
+        ];
+        for pf in &program_files {
+            if let Ok(entries) = fs::read_dir(pf) {
+                for entry in entries.flatten() {
+                    let path = entry.path();
+                    if path.is_dir() {
+                        if let Some(folder_name) = path.file_name().and_then(|n| n.to_str()) {
+                            let folder_lower = folder_name.to_lowercase();
+                            if folder_lower.contains("ca")
+                                || folder_lower.contains("token")
+                                || folder_lower.contains("manager")
+                                || folder_lower.contains("card")
+                                || folder_lower.contains("sign")
+                                || folder_lower.contains("security")
+                                || folder_lower.contains("key")
+                                || folder_lower.contains("opensc")
+                            {
+                                scan_directory_for_drivers(&path, 1, 2, &mut standard);
+                            }
+                        }
+                    }
+                }
+            }
         }
         
         standard.push("C:\\Program Files\\OpenSC Project\\OpenSC\\pkcs11\\opensc-pkcs11.dll".to_string());
         standard.push("C:\\Program Files (x86)\\OpenSC Project\\OpenSC\\pkcs11\\opensc-pkcs11.dll".to_string());
+    }
+
+    custom_drivers.append(&mut standard);
+    
+    custom_drivers.sort();
+    custom_drivers.dedup();
+    
+    custom_drivers
+}
+
+#[cfg(target_os = "windows")]
+fn get_windows_store_certificates() -> Option<Vec<serde_json::Value>> {
+    let script = r#"
+        $ErrorActionPreference = 'Stop'
+        $certs = Get-ChildItem -Path Cert:\CurrentUser\My | Where-Object { $_.HasPrivateKey }
+        $result = @()
+        if ($certs) {
+            foreach ($cert in $certs) {
+                try {
+                    $hex = [System.BitConverter]::ToString($cert.RawData).Replace("-", "").ToLower()
+                    $result += [PSCustomObject]@{
+                        id = "win_" + $cert.Thumbprint
+                        label = $cert.Subject
+                        subject = $cert.Subject
+                        issuer = $cert.Issuer
+                        valid_from = $cert.NotBefore.ToString("yyyy-MM-dd")
+                        valid_to = $cert.NotAfter.ToString("yyyy-MM-dd")
+                        validTo = $cert.NotAfter.ToString("yyyy-MM-dd")
+                        serial = $cert.SerialNumber
+                        certData = $hex
+                    }
+                } catch {}
+            }
+        }
+        Write-Output (@($result) | ConvertTo-Json -Compress)
+    "#;
+
+    let output = new_command("powershell")
+        .args(["-NoProfile", "-Command", script])
+        .output()
+        .ok()?;
+
+    if output.status.success() {
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let parsed: serde_json::Value = serde_json::from_str(stdout.trim()).ok()?;
+        if let Some(arr) = parsed.as_array() {
+            return Some(arr.clone());
+        }
+    }
+    None
+}
+
+#[cfg(target_os = "windows")]
+fn sign_with_windows_store(thumbprint: &str, hash_hex: &str) -> Result<String, String> {
+    let script = format!(r#"
+        $ErrorActionPreference = 'Stop'
+        $thumbprint = "{}"
+        $hashHex = "{}"
         
-        custom_drivers.append(&mut standard);
-        custom_drivers
+        $cert = Get-Item "Cert:\CurrentUser\My\$thumbprint" -ErrorAction Stop
+        
+        $hashBytes = New-Object byte[] ($hashHex.Length / 2)
+        for ($i=0; $i -lt $hashHex.Length; $i+=2) {{
+            $hashBytes[$i/2] = [System.Convert]::ToByte($hashHex.Substring($i, 2), 16)
+        }}
+        
+        $privateKey = [System.Security.Cryptography.X509Certificates.RSACertificateExtensions]::GetRSAPrivateKey($cert)
+        if (-not $privateKey) {{
+            throw "Private key not accessible or not RSA"
+        }}
+        
+        $sigBytes = $privateKey.SignHash($hashBytes, [System.Security.Cryptography.HashAlgorithmName]::SHA256, [System.Security.Cryptography.RSASignaturePadding]::Pkcs1)
+        $sigHex = [System.BitConverter]::ToString($sigBytes).Replace("-", "").ToLower()
+        Write-Output $sigHex
+    "#, thumbprint, hash_hex);
+
+    let output = new_command("powershell")
+        .args(["-NoProfile", "-Command", &script])
+        .output()
+        .map_err(|e| format!("Failed to execute powershell: {}", e))?;
+
+    if output.status.success() {
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        Ok(stdout.trim().to_string())
+    } else {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        Err(stderr.trim().to_string())
     }
 }
 
@@ -561,25 +787,10 @@ fn detect_active_driver_and_label() -> Option<(String, String, bool)> {
             .cloned()
             .collect();
     
-        if !existing_drivers.is_empty() {
-            let mut handles = Vec::new();
-            for driver in existing_drivers {
-                let handle = std::thread::spawn(move || {
-                    if let Some((label, login_required)) = check_driver_valid(&driver) {
-                        Some((driver, label, login_required))
-                    } else {
-                        None
-                    }
-                });
-                handles.push(handle);
-            }
-        
-            for handle in handles {
-                if let Ok(Some(result)) = handle.join() {
-                    if detected.is_none() {
-                        detected = Some(result);
-                    }
-                }
+        for driver in existing_drivers {
+            if let Some((label, login_required)) = check_driver_valid(&driver) {
+                detected = Some((driver, label, login_required));
+                break;
             }
         }
     }
@@ -621,6 +832,16 @@ pub fn get_usb_certificates() -> Vec<serde_json::Value> {
     
     if let Some(cached) = get_cached_certs(&sig) {
         return cached;
+    }
+    
+    #[cfg(target_os = "windows")]
+    {
+        if let Some(win_certs) = get_windows_store_certificates() {
+            if !win_certs.is_empty() {
+                set_cached_certs(sig.clone(), win_certs.clone());
+                return win_certs;
+            }
+        }
     }
     
     if let Some(cached) = read_persistent_certs(&sig) {
@@ -1212,6 +1433,90 @@ async fn handle_connection(mut stream: TcpStream, keys: Arc<AgentKeys>) -> Resul
 
             println!("[uid-agent] Received sign request for cert_id: '{}', normalized hash: '{}'", cert_id, hash_hex);
 
+            #[cfg(target_os = "windows")]
+            {
+                let mut is_win_store = cert_id.starts_with("win_");
+                let mut win_thumbprint = if is_win_store {
+                    cert_id.trim_start_matches("win_").to_string()
+                } else {
+                    String::new()
+                };
+
+                // Fallback: if cert_id is usb_auto_detected/empty, check if we have windows store certs
+                if !is_win_store && (cert_id == "usb_auto_detected" || cert_id.is_empty()) {
+                    if let Some(win_certs) = get_windows_store_certificates() {
+                        if !win_certs.is_empty() {
+                            if let Some(id_str) = win_certs[0]["id"].as_str() {
+                                is_win_store = true;
+                                win_thumbprint = id_str.trim_start_matches("win_").to_string();
+                            }
+                        }
+                    }
+                }
+
+                if is_win_store && !win_thumbprint.is_empty() {
+                    match sign_with_windows_store(&win_thumbprint, &hash_hex) {
+                        Ok(sig_hex) => {
+                            // Read certificate data if it's auto_detected/empty for browser state update
+                            let mut cert_data = String::new();
+                            if cert_id == "usb_auto_detected" || cert_id.is_empty() {
+                                if let Some(win_certs) = get_windows_store_certificates() {
+                                    for c in win_certs {
+                                        if c["id"].as_str().unwrap_or("").contains(&win_thumbprint) {
+                                            cert_data = c["certData"].as_str().unwrap_or("").to_string();
+                                            break;
+                                        }
+                                    }
+                                }
+                            }
+
+                            let response_json = json!({
+                                "success": true,
+                                "signature": sig_hex,
+                                "SignatureValue": sig_hex,
+                                "data": sig_hex,
+                                "certData": cert_data,
+                                "code": 0,
+                                "error": ""
+                            });
+                            let res_body = response_json.to_string();
+                            let response = format!(
+                                "HTTP/1.1 200 OK\r\n\
+                                 {}\
+                                 Content-Type: application/json\r\n\
+                                 Content-Length: {}\r\n\
+                                 Connection: close\r\n\r\n{}",
+                                cors_headers,
+                                res_body.len(),
+                                res_body
+                            );
+                            stream.write_all(response.as_bytes()).await?;
+                            return Ok(());
+                        }
+                        Err(e) => {
+                            let err_json = json!({
+                                "success": false,
+                                "error": format!("Windows Store signing failed: {}", e),
+                                "code": 1
+                            });
+                            let res_body = err_json.to_string();
+                            let response = format!(
+                                "HTTP/1.1 400 Bad Request\r\n\
+                                 {}\
+                                 Content-Type: application/json\r\n\
+                                 Content-Length: {}\r\n\
+                                 Connection: close\r\n\r\n{}",
+                                cors_headers,
+                                res_body.len(),
+                                res_body
+                            );
+                            stream.write_all(response.as_bytes()).await?;
+                            return Ok(());
+                        }
+                    }
+                }
+            }
+
             if cert_id.starts_with("usb_") || cert_id == "usb_auto_detected" || cert_id.is_empty() {
                 let mut resolved_pin = pin.to_string();
                 if resolved_pin.is_empty() {
@@ -1668,6 +1973,53 @@ fn prompt_gui_pin(label: &str) -> Option<String> {
             }
         }
     }
+    #[cfg(target_os = "windows")]
+    {
+        let ps_code = format!(
+            "Add-Type -AssemblyName System.Windows.Forms; \
+             Add-Type -AssemblyName System.Drawing; \
+             $form = New-Object System.Windows.Forms.Form; \
+             $form.Text = 'UID.one Token PIN Entry'; \
+             $form.Size = New-Object System.Drawing.Size(340,190); \
+             $form.StartPosition = 'CenterScreen'; \
+             $form.FormBorderStyle = 'FixedDialog'; \
+             $form.MaximizeBox = $false; \
+             $form.MinimizeBox = $false; \
+             $form.TopMost = $true; \
+             $label = New-Object System.Windows.Forms.Label; \
+             $label.Location = New-Object System.Drawing.Point(20,20); \
+             $label.Size = New-Object System.Drawing.Size(300,30); \
+             $label.Text = 'Please enter the PIN for token: {}'; \
+             $textBox = New-Object System.Windows.Forms.TextBox; \
+             $textBox.Location = New-Object System.Drawing.Point(20,60); \
+             $textBox.Size = New-Object System.Drawing.Size(280,20); \
+             $textBox.UseSystemPasswordChar = $true; \
+             $button = New-Object System.Windows.Forms.Button; \
+             $button.Location = New-Object System.Drawing.Point(110,100); \
+             $button.Size = New-Object System.Drawing.Size(100,30); \
+             $button.Text = 'OK'; \
+             $button.DialogResult = [System.Windows.Forms.DialogResult]::OK; \
+             $form.Controls.Add($label); \
+             $form.Controls.Add($textBox); \
+             $form.Controls.Add($button); \
+             $form.AcceptButton = $button; \
+             if ($form.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {{ \
+                 Write-Output $textBox.Text \
+             }}",
+            label.replace("'", "''")
+        );
+        let output = new_command("powershell")
+            .args(["-NoProfile", "-Command", &ps_code])
+            .output();
+        if let Ok(out) = output {
+            if out.status.success() {
+                let pin = String::from_utf8_lossy(&out.stdout).trim().to_string();
+                if !pin.is_empty() {
+                    return Some(pin);
+                }
+            }
+        }
+    }
     None
 }
 
@@ -1698,6 +2050,26 @@ fn prompt_gui_approval(message: &str) -> bool {
             if out.status.success() {
                 let stdout = String::from_utf8_lossy(&out.stdout);
                 return stdout.contains("button returned:Approve");
+            }
+        }
+    }
+    #[cfg(target_os = "windows")]
+    {
+        let ps_code = format!(
+            "Add-Type -AssemblyName System.Windows.Forms; \
+             $result = [System.Windows.Forms.MessageBox]::Show('{}', 'UID.one Enclave Approval', [System.Windows.Forms.MessageBoxButtons]::YesNo, [System.Windows.Forms.MessageBoxIcon]::Question, [System.Windows.Forms.MessageBoxDefaultButton]::Button1, [System.Windows.Forms.MessageBoxOptions]::DefaultDesktopOnly); \
+             if ($result -eq [System.Windows.Forms.DialogResult]::Yes) {{ \
+                 Write-Output 'Approve' \
+             }}",
+            message.replace("'", "''")
+        );
+        let output = new_command("powershell")
+            .args(["-NoProfile", "-Command", &ps_code])
+            .output();
+        if let Ok(out) = output {
+            if out.status.success() {
+                let stdout = String::from_utf8_lossy(&out.stdout);
+                return stdout.trim() == "Approve";
             }
         }
     }

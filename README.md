@@ -54,6 +54,33 @@ Once installed via `.deb`:
 
 ---
 
+## Desktop GUI Build & Installation (macOS)
+
+### 1. Install Build Dependencies
+To compile the Tauri desktop app on macOS:
+1. **Xcode Command Line Tools**: Run `xcode-select --install` in your terminal.
+2. **Rustup (Rust compiler)**: Install Rust via [rustup.rs](https://rustup.rs/).
+3. **Node.js & pnpm**: Install Node.js and run `npm install -g pnpm`.
+
+### 2. Build and Package (.dmg / .app)
+To compile and package the app as a universal macOS app bundle:
+```bash
+# Navigate to the workspace and build
+npx -y @tauri-apps/cli build --target universal-apple-darwin
+```
+This will compile both Apple Silicon (ARM64) and Intel (x86_64) architectures, generating:
+* **Disk Image Installer**: `src-tauri/target/release/bundle/dmg/uid-agent-desktop_3.0.0_universal.dmg`
+* **App Bundle**: `src-tauri/target/release/bundle/macos/uid-agent-desktop.app`
+
+### 3. Bypass macOS Gatekeeper (Quarantine)
+Since the pre-compiled releases are self-signed, macOS Gatekeeper blocks opening them by default. After moving the app to your `/Applications` directory, run this command in terminal to remove the quarantine flag:
+```bash
+xattr -d com.apple.quarantine /Applications/uid-agent-desktop.app
+```
+Alternatively, you can right-click the app icon in Finder, select **Open**, and click **Open Anyway** in the confirmation dialog.
+
+---
+
 ## Desktop GUI Build & Installation (Windows)
 
 ### 1. Install Build Dependencies

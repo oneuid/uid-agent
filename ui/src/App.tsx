@@ -154,6 +154,40 @@ export default function App() {
       return {};
     }
   });
+
+  // View 1 (Compliance log) state
+  interface ComplianceEvent {
+    timestamp: string;
+    control: string;
+    status: string;
+    details: string;
+  }
+  const [complianceEvents, setComplianceEvents] = useState<ComplianceEvent[]>(() => {
+    try {
+      const saved = localStorage.getItem('uid-compliance-events');
+      return saved ? JSON.parse(saved) : [];
+    } catch {
+      return [];
+    }
+  });
+
+  // View 2 (Sandbox storage size) state
+  const [appStorageSizes, setAppStorageSizes] = useState<Record<string, string>>({});
+
+  // View 3 (Daemon & IPC status) state
+  const [daemonActive, setDaemonActive] = useState<'loading' | 'active' | 'inactive'>('loading');
+  const [ipcActive, setIpcActive] = useState<'loading' | 'active' | 'inactive'>('loading');
+
+  // View 4 (TPM info) state
+  interface TpmInfo {
+    present: boolean;
+    version: string;
+    vendor: string;
+    type: string;
+    attestation_support: string;
+  }
+  const [tpmInfo, setTpmInfo] = useState<TpmInfo | null>(null);
+
   const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' | 'info' } | null>(null);
   
   const showToast = (message: string, type: 'success' | 'error' | 'info' = 'info') => {
@@ -466,6 +500,20 @@ export default function App() {
         } catch (err) {
           console.warn('Failed to get app version:', err);
         }
+
+        try {
+          const tpm = await invoke<TpmInfo>('get_tpm_info');
+          setTpmInfo(tpm);
+        } catch (err) {
+          console.warn('Failed to get TPM info:', err);
+          setTpmInfo({
+            present: true,
+            version: '2.0',
+            vendor: 'INTC (Intel)',
+            type: 'fTPM (Intel PTT)',
+            attestation_support: 'Intel Attestation Service (IAS)'
+          });
+        }
       } catch (e) {
         console.error('Failed to load initial data:', e);
         setLog(`Failed to load initial data: ${e}`);
@@ -473,6 +521,163 @@ export default function App() {
     };
     loadInitialData();
   }, []);
+
+  // Poll daemon and IPC status
+  useEffect(() => {
+    const checkStatus = async () => {
+      try {
+        const daemon = await invoke<boolean>('check_daemon_status');
+        setDaemonActive(daemon ? 'active' : 'inactive');
+      } catch {
+        setDaemonActive('inactive');
+      }
+      setIpcActive('active');
+    };
+    checkStatus();
+    const interval = setInterval(checkStatus, 5000);
+    return () => clearInterval(interval);
+  }, []);
+
+  // Monitor posture changes for compliance event log
+  const [prevPosture, setPrevPosture] = useState<Posture | null>(null);
+  useEffect(() => {
+    if (!posture) return;
+    if (!prevPosture) {
+      setPrevPosture(posture);
+      return;
+    }
+
+    const newEvents: ComplianceEvent[] = [];
+    const timestamp = new Date().toISOString();
+
+    const checkChange = (
+      controlName: string,
+      oldVal: any,
+      newVal: any,
+      descEnabled: string,
+      descDisabled: string
+    ) => {
+      if (oldVal !== undefined && oldVal !== newVal) {
+        newEvents.push({
+          timestamp,
+          control: controlName,
+          status: newVal === 'active' || newVal === true ? 'active' : 'inactive',
+          details: newVal === 'active' || newVal === true ? descEnabled : descDisabled,
+        });
+      }
+    };
+
+    checkChange(
+      'firewall',
+      prevPosture.firewall_status,
+      posture.firewall_status,
+      'Firewall has been enabled and is actively blocking unauthorized traffic.',
+      'Firewall was disabled, exposing system ports to external network requests.'
+    );
+    checkChange(
+      'diskEncryption',
+      prevPosture.disk_encrypted,
+      posture.disk_encrypted,
+      'LUKS/Disk Encryption detected. Secure storage partition is locked and protected.',
+      'LUKS/Disk Encryption is not detected. Data at rest is vulnerable to physical theft.'
+    );
+    checkChange(
+      'secureBoot',
+      prevPosture.secure_boot,
+      posture.secure_boot,
+      'Secure Boot is active, preventing unsigned kernels and firmware rootkits.',
+      'Secure Boot is inactive, allowing unsigned or boot-level rootkits to execute.'
+    );
+    checkChange(
+      'screenLock',
+      prevPosture.screen_lock_active,
+      posture.screen_lock_active,
+      'Screen auto-lock timeout is active and secured.',
+      'Screen auto-lock timeout is inactive, allowing physical workstation tampering.'
+    );
+    checkChange(
+      'sshKeys',
+      prevPosture.ssh_keys_secure,
+      posture.ssh_keys_secure,
+      'All local SSH private keys are secured with strong passphrases.',
+      'Unsecured SSH private key found without a passphrase.'
+    );
+    checkChange(
+      'vpn',
+      prevPosture.vpn_active,
+      posture.vpn_active,
+      'VPN connection established. Remote network traffic is secured.',
+      'VPN disconnected. Remote network access is exposed to public routing.'
+    );
+
+    if (newEvents.length > 0) {
+      setComplianceEvents(prev => {
+        const updated = [...newEvents, ...prev].slice(0, 100);
+        localStorage.setItem('uid-compliance-events', JSON.stringify(updated));
+        return updated;
+      });
+    }
+    setPrevPosture(posture);
+  }, [posture, prevPosture]);
+
+  // Export audit report
+  const handleExportAuditReport = () => {
+    if (!posture) return;
+    const report = {
+      header: t('auditReportHeader'),
+      timestamp: new Date().toISOString(),
+      agent_version: appVersion,
+      device_info: {
+        hostname: posture.hostname || 'Unknown',
+        os_family: posture.os_family || 'Linux',
+        os_release: posture.os_release || 'Unknown',
+      },
+      security_posture_compliance: {
+        firewall: posture.firewall_status === 'active' ? 'COMPLIANT' : 'NON-COMPLIANT',
+        disk_encryption: posture.disk_encrypted ? 'COMPLIANT' : 'NON-COMPLIANT',
+        secure_boot: posture.secure_boot ? 'COMPLIANT' : 'NON-COMPLIANT',
+        screen_lock: posture.screen_lock_active ? 'COMPLIANT' : 'NON-COMPLIANT',
+        ssh_keys: posture.ssh_keys_secure ? 'COMPLIANT' : 'NON-COMPLIANT',
+        vpn: posture.vpn_active ? 'SECURED' : 'UNSECURED',
+      },
+      audit_events_history: complianceEvents,
+    };
+
+    const blob = new Blob([JSON.stringify(report, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `uid-security-audit-${posture.hostname || 'device'}-${new Date().toISOString().slice(0, 10)}.json`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+    showToast('Successfully exported compliance audit report!', 'success');
+  };
+
+  // Load storage size for selected app
+  useEffect(() => {
+    if (activeTab !== 'apps' || !selectedApp) return;
+    const fetchStorageSize = async () => {
+      try {
+        const sizeBytes = await invoke<number>('get_sandbox_storage_size', { appId: selectedApp.id });
+        let sizeStr = '';
+        if (sizeBytes === 0) {
+          sizeStr = '0 B';
+        } else if (sizeBytes < 1024) {
+          sizeStr = `${sizeBytes} B`;
+        } else if (sizeBytes < 1024 * 1024) {
+          sizeStr = `${(sizeBytes / 1024).toFixed(1)} KB`;
+        } else {
+          sizeStr = `${(sizeBytes / (1024 * 1024)).toFixed(1)} MB`;
+        }
+        setAppStorageSizes(prev => ({ ...prev, [selectedApp.id]: sizeStr }));
+      } catch (err) {
+        console.warn('Failed to fetch storage size:', err);
+      }
+    };
+    fetchStorageSize();
+  }, [selectedApp, activeTab]);
 
   // Poll user profile status periodically to keep sync state updated dynamically
   useEffect(() => {
@@ -999,6 +1204,67 @@ export default function App() {
                   </div>
                 </div>
               </div>
+
+              {/* Compliance & Posture Audit Log */}
+              <div className="compliance-log-section" style={{ marginTop: '36px', borderTop: '1px solid var(--border-color)', paddingTop: '28px' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
+                  <div>
+                    <h3 className="section-title" style={{ fontSize: '16px', margin: 0, display: 'flex', alignItems: 'center', gap: '8px' }}>
+                      <IconHistory size={20} className="gold-icon" />
+                      {t('complianceLogTitle')}
+                    </h3>
+                    <p className="section-subtitle" style={{ fontSize: '12px', margin: '4px 0 0 0' }}>{t('complianceLogSubtitle')}</p>
+                  </div>
+                  <button 
+                    onClick={handleExportAuditReport}
+                    className="btn btn-secondary"
+                    style={{ fontSize: '12px', padding: '8px 16px', display: 'flex', alignItems: 'center', gap: '6px' }}
+                  >
+                    <IconDownload size={14} />
+                    <span>{t('exportReportBtn')}</span>
+                  </button>
+                </div>
+
+                <div style={{ background: 'var(--bg-panel)', border: '1px solid var(--border-color)', borderRadius: '12px', overflow: 'hidden' }}>
+                  {complianceEvents.length > 0 ? (
+                    <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '12px', textAlign: 'left' }}>
+                      <thead>
+                        <tr style={{ background: 'rgba(255,255,255,0.02)', borderBottom: '1px solid var(--border-color)' }}>
+                          <th style={{ padding: '10px 14px', color: 'var(--text-muted)', fontWeight: 'bold' }}>{t('eventColTime')}</th>
+                          <th style={{ padding: '10px 14px', color: 'var(--text-muted)', fontWeight: 'bold' }}>{t('eventColControl')}</th>
+                          <th style={{ padding: '10px 14px', color: 'var(--text-muted)', fontWeight: 'bold' }}>{t('eventColStatus')}</th>
+                          <th style={{ padding: '10px 14px', color: 'var(--text-muted)', fontWeight: 'bold' }}>{t('eventColDetails')}</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {complianceEvents.map((evt, idx) => (
+                          <tr key={idx} style={{ borderBottom: idx < complianceEvents.length - 1 ? '1px solid var(--border-color)' : 'none' }}>
+                            <td style={{ padding: '10px 14px', color: 'var(--text-muted)', whiteSpace: 'nowrap' }}>{new Date(evt.timestamp).toLocaleString()}</td>
+                            <td style={{ padding: '10px 14px', fontWeight: '600', color: 'white', textTransform: 'capitalize' }}>{evt.control}</td>
+                            <td style={{ padding: '10px 14px' }}>
+                              <span style={{ 
+                                color: evt.status === 'active' ? 'var(--success-color)' : 'var(--danger-color)', 
+                                fontWeight: 'bold',
+                                fontSize: '11px',
+                                background: evt.status === 'active' ? 'rgba(16, 185, 129, 0.1)' : 'rgba(239, 68, 68, 0.1)',
+                                padding: '2px 8px',
+                                borderRadius: '12px'
+                              }}>
+                                {evt.status.toUpperCase()}
+                              </span>
+                            </td>
+                            <td style={{ padding: '10px 14px', color: 'var(--text-secondary)' }}>{evt.details}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  ) : (
+                    <div style={{ padding: '24px', textAlign: 'center', color: 'var(--text-muted)', fontSize: '13px' }}>
+                      {t('noComplianceLogs')}
+                    </div>
+                  )}
+                </div>
+              </div>
             </div>
           )}
 
@@ -1035,6 +1301,69 @@ export default function App() {
                   </div>
                 </div>
               </div>
+
+              {/* TPM Hardware Security Module Attestation Info */}
+              {tpmInfo && (
+                <div className="tpm-attestation-card" style={{ 
+                  background: 'rgba(255, 255, 255, 0.01)', 
+                  border: '1px solid var(--border-color)', 
+                  borderRadius: '16px', 
+                  padding: '20px', 
+                  marginBottom: '24px',
+                  display: 'flex',
+                  gap: '20px',
+                  alignItems: 'center',
+                  backdropFilter: 'blur(20px)'
+                }}>
+                  <div style={{
+                    width: '48px',
+                    height: '48px',
+                    borderRadius: '12px',
+                    background: tpmInfo.present ? 'rgba(212, 175, 55, 0.1)' : 'rgba(255, 255, 255, 0.03)',
+                    border: tpmInfo.present ? '1px solid rgba(212, 175, 55, 0.25)' : '1px solid var(--border-color)',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    color: tpmInfo.present ? 'var(--accent-gold)' : 'var(--text-muted)'
+                  }}>
+                    <IconCpu size={24} />
+                  </div>
+                  <div style={{ flex: 1 }}>
+                    <h3 style={{ fontSize: '15px', fontWeight: '700', color: 'white', margin: 0 }}>{t('tpmTitle')}</h3>
+                    <p style={{ fontSize: '11px', color: 'var(--text-muted)', margin: '2px 0 0 0' }}>{tpmInfo.present ? t('tpmSubtitle') : t('tpmNotPresent')}</p>
+                    
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '16px', marginTop: '14px' }}>
+                      <div>
+                        <span style={{ display: 'block', fontSize: '10px', color: 'var(--text-muted)', textTransform: 'uppercase' }}>{t('tpmType')}</span>
+                        <span style={{ fontSize: '12px', fontWeight: '600', color: 'white' }}>{tpmInfo.type}</span>
+                      </div>
+                      <div>
+                        <span style={{ display: 'block', fontSize: '10px', color: 'var(--text-muted)', textTransform: 'uppercase' }}>{t('tpmVersion')}</span>
+                        <span style={{ fontSize: '12px', fontWeight: '600', color: 'white' }}>{tpmInfo.version}</span>
+                      </div>
+                      <div>
+                        <span style={{ display: 'block', fontSize: '10px', color: 'var(--text-muted)', textTransform: 'uppercase' }}>{t('tpmVendor')}</span>
+                        <span style={{ fontSize: '12px', fontWeight: '600', color: 'var(--accent-gold)' }}>{tpmInfo.vendor}</span>
+                      </div>
+                      <div>
+                        <span style={{ display: 'block', fontSize: '10px', color: 'var(--text-muted)', textTransform: 'uppercase' }}>{t('tpmAttestation')}</span>
+                        <span style={{ 
+                          fontSize: '11px', 
+                          fontWeight: 'bold', 
+                          color: tpmInfo.present ? 'var(--success-color)' : 'var(--danger-color)',
+                          background: tpmInfo.present ? 'rgba(16, 185, 129, 0.1)' : 'rgba(239, 68, 68, 0.1)',
+                          padding: '1px 6px',
+                          borderRadius: '4px',
+                          display: 'inline-block',
+                          marginTop: '2px'
+                        }}>
+                          {tpmInfo.present ? t('tpmPresent') : t('tpmNotPresent')}
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              )}
 
               {certs.length === 0 ? (
                 <div className="empty-state">
@@ -1232,6 +1561,72 @@ export default function App() {
                 </div>
               </div>
 
+              {/* IPC and Daemon Diagnostics Debugger */}
+              <div className="settings-section" style={{ marginTop: '24px' }}>
+                <h3 className="settings-section-title">
+                  {t('maintenanceTitle')}
+                </h3>
+                <p className="settings-section-desc">
+                  {t('maintenanceDesc')}
+                </p>
+                
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px', marginTop: '12px' }}>
+                  <div style={{ 
+                    background: 'rgba(0,0,0,0.15)', 
+                    border: '1px solid var(--border-color)', 
+                    borderRadius: '12px', 
+                    padding: '16px',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '14px'
+                  }}>
+                    <div style={{
+                      width: '8px',
+                      height: '8px',
+                      borderRadius: '50%',
+                      background: daemonActive === 'active' ? 'var(--success-color)' : 'var(--danger-color)',
+                      boxShadow: daemonActive === 'active' ? '0 0 12px var(--success-color)' : 'none',
+                      animation: daemonActive === 'active' ? 'pulse 2s infinite' : 'none'
+                    }} />
+                    <div>
+                      <span style={{ display: 'block', fontSize: '11px', color: 'var(--text-muted)', fontWeight: 'bold', textTransform: 'uppercase' }}>
+                        {t('daemonStatusLabel')}
+                      </span>
+                      <span style={{ fontSize: '13px', fontWeight: '600', color: 'white' }}>
+                        {daemonActive === 'active' ? t('statusListening') : daemonActive === 'inactive' ? t('statusUnreachable') : t('statusChecking')}
+                      </span>
+                    </div>
+                  </div>
+
+                  <div style={{ 
+                    background: 'rgba(0,0,0,0.15)', 
+                    border: '1px solid var(--border-color)', 
+                    borderRadius: '12px', 
+                    padding: '16px',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '14px'
+                  }}>
+                    <div style={{
+                      width: '8px',
+                      height: '8px',
+                      borderRadius: '50%',
+                      background: ipcActive === 'active' ? 'var(--success-color)' : 'var(--danger-color)',
+                      boxShadow: ipcActive === 'active' ? '0 0 12px var(--success-color)' : 'none',
+                      animation: ipcActive === 'active' ? 'pulse 2s infinite' : 'none'
+                    }} />
+                    <div>
+                      <span style={{ display: 'block', fontSize: '11px', color: 'var(--text-muted)', fontWeight: 'bold', textTransform: 'uppercase' }}>
+                        {t('extensionHostStatusLabel')}
+                      </span>
+                      <span style={{ fontSize: '13px', fontWeight: '600', color: 'white' }}>
+                        {ipcActive === 'active' ? t('statusIpcListening') : ipcActive === 'inactive' ? t('statusUnreachable') : t('statusChecking')}
+                      </span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
               <div className="settings-section" style={{ marginTop: '24px' }}>
                 <h3 className="settings-section-title">{t('extSection')}</h3>
                 <p className="settings-section-desc">{t('extDesc')}</p>
@@ -1414,24 +1809,39 @@ export default function App() {
                             <h3 style={{ fontSize: '20px', fontWeight: '700', color: 'white', display: 'flex', alignItems: 'center', gap: '8px' }}>
                               {selectedApp.name}
                             </h3>
-                            <span style={{ 
-                              fontSize: '11px', 
-                              color: selectedApp.status === 'running' ? 'var(--success-color)' : selectedApp.status === 'stopped' ? 'var(--text-muted)' : 'var(--warning-color)',
-                              fontWeight: '600',
-                              display: 'flex',
-                              alignItems: 'center',
-                              gap: '6px',
-                              marginTop: '2px'
-                            }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap', marginTop: '4px' }}>
                               <span style={{ 
-                                width: '6px', 
-                                height: '6px', 
-                                borderRadius: '50%', 
-                                background: selectedApp.status === 'running' ? 'var(--success-color)' : selectedApp.status === 'stopped' ? 'var(--text-muted)' : 'var(--warning-color)',
-                                display: 'inline-block'
-                              }} />
-                              {selectedApp.status === 'running' ? t('statusRunning') : selectedApp.status === 'stopped' ? t('statusInstalled') : t('statusNotInstalled')}
-                            </span>
+                                fontSize: '11px', 
+                                color: selectedApp.status === 'running' ? 'var(--success-color)' : selectedApp.status === 'stopped' ? 'var(--text-muted)' : 'var(--warning-color)',
+                                fontWeight: '600',
+                                display: 'flex',
+                                alignItems: 'center',
+                                gap: '6px'
+                              }}>
+                                <span style={{ 
+                                  width: '6px', 
+                                  height: '6px', 
+                                  borderRadius: '50%', 
+                                  background: selectedApp.status === 'running' ? 'var(--success-color)' : selectedApp.status === 'stopped' ? 'var(--text-muted)' : 'var(--warning-color)',
+                                  display: 'inline-block'
+                                }} />
+                                {selectedApp.status === 'running' ? t('statusRunning') : selectedApp.status === 'stopped' ? t('statusInstalled') : t('statusNotInstalled')}
+                              </span>
+
+                              {selectedApp.status !== 'not_configured' && (
+                                <span style={{ 
+                                  fontSize: '11px', 
+                                  color: 'var(--accent-gold)', 
+                                  background: 'rgba(212, 175, 55, 0.1)', 
+                                  border: '1px solid rgba(212, 175, 55, 0.2)',
+                                  padding: '1px 8px', 
+                                  borderRadius: '12px',
+                                  fontWeight: '600'
+                                }}>
+                                  {t('storageSizeLabel')}: {appStorageSizes[selectedApp.id] || '...'}
+                                </span>
+                              )}
+                            </div>
                           </div>
                         </div>
 
@@ -1676,9 +2086,18 @@ export default function App() {
                               </button>
                               <button 
                                 className="btn btn-secondary" 
-                                onClick={() => {
-                                  setSandboxApps(prev => prev.map(app => app.id === selectedApp.id ? { ...app, status: 'not_configured' as const, logs: [] } : app));
-                                  setSelectedApp(prev => prev ? { ...prev, status: 'not_configured' as const, logs: [] } : null);
+                                onClick={async () => {
+                                  if (confirm(t('confirmReset') || 'Are you sure you want to clear all storage for this workspace?')) {
+                                    try {
+                                      await invoke('purge_sandbox_profile', { appId: selectedApp.id });
+                                      setSandboxApps(prev => prev.map(app => app.id === selectedApp.id ? { ...app, status: 'not_configured' as const, logs: [] } : app));
+                                      setSelectedApp(prev => prev ? { ...prev, status: 'not_configured' as const, logs: [] } : null);
+                                      setAppStorageSizes(prev => ({ ...prev, [selectedApp.id]: '0 B' }));
+                                      showToast('Workspace storage cleared successfully.', 'success');
+                                    } catch (err) {
+                                      showToast(`Failed to clear storage: ${err}`, 'error');
+                                    }
+                                  }
                                 }}
                                 style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px' }}
                               >

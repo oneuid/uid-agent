@@ -1623,6 +1623,76 @@ async fn install_browser_extension(custom_chrome_id: Option<String>) -> Result<S
     Ok(logs.join("\n"))
 }
 
+#[tauri::command]
+async fn purge_sandbox_profile(app_id: String, app_handle: tauri::AppHandle) -> Result<String, String> {
+    let local_data = get_agent_data_dir(&app_handle);
+    let isolated_dir = local_data.join("apps").join(&app_id);
+    if isolated_dir.exists() {
+        std::fs::remove_dir_all(&isolated_dir)
+            .map_err(|e| format!("Failed to delete isolated directory: {}", e))?;
+    }
+    Ok("Isolated sandbox storage purged successfully.".to_string())
+}
+
+#[tauri::command]
+async fn get_sandbox_storage_size(app_id: String, app_handle: tauri::AppHandle) -> Result<u64, String> {
+    let local_data = get_agent_data_dir(&app_handle);
+    let isolated_dir = local_data.join("apps").join(&app_id);
+    if !isolated_dir.exists() {
+        return Ok(0);
+    }
+    
+    fn get_dir_size(dir: &std::path::Path) -> std::io::Result<u64> {
+        let mut total = 0;
+        if dir.is_dir() {
+            for entry in std::fs::read_dir(dir)? {
+                let entry = entry?;
+                let path = entry.path();
+                if path.is_dir() {
+                    total += get_dir_size(&path)?;
+                } else {
+                    total += entry.metadata()?.len();
+                }
+            }
+        }
+        Ok(total)
+    }
+
+    get_dir_size(&isolated_dir).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn check_daemon_status() -> bool {
+    tokio::net::TcpStream::connect("127.0.0.1:13013").await.is_ok()
+}
+
+#[tauri::command]
+async fn get_tpm_info() -> serde_json::Value {
+    let has_tpm = std::path::Path::new("/dev/tpm0").exists() || std::path::Path::new("/dev/tpmrm0").exists();
+    let mut version = "1.2/Unknown".to_string();
+    let mut vendor = "Generic".to_string();
+    if has_tpm {
+        if let Ok(v) = std::fs::read_to_string("/sys/class/tpm/tpm0/tpm_version_major") {
+            if v.trim() == "2" {
+                version = "2.0".to_string();
+            }
+        }
+        if let Ok(ven) = std::fs::read_to_string("/sys/class/tpm/tpm0/device/vendor") {
+            let trimmed = ven.trim();
+            if !trimmed.is_empty() {
+                vendor = trimmed.to_string();
+            }
+        }
+    }
+    json!({
+        "present": has_tpm,
+        "version": version,
+        "vendor": vendor,
+        "type": "TPM (Trusted Platform Module)",
+        "attestation_support": if has_tpm { "Enabled (Hardware-Bound)" } else { "N/A" }
+    })
+}
+
 // Entry Point
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -1796,7 +1866,10 @@ pub fn run() {
         .on_window_event(|window, event| match event {
             WindowEvent::CloseRequested { api, .. } => {
                 api.prevent_close();
-                let _ = window.hide();
+                let w = window.clone();
+                tauri::async_runtime::spawn(async move {
+                    let _ = w.hide();
+                });
             }
             _ => {}
         })
@@ -1815,7 +1888,11 @@ pub fn run() {
             remediate_screen_lock,
             get_signature_history,
             get_app_version,
-            install_browser_extension
+            install_browser_extension,
+            purge_sandbox_profile,
+            get_sandbox_storage_size,
+            check_daemon_status,
+            get_tpm_info
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
