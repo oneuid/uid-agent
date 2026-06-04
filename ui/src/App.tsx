@@ -136,6 +136,14 @@ export default function App() {
   const [log, setLog] = useState<string>('');
   const [checkingUpdate, setCheckingUpdate] = useState<boolean>(false);
   const [appVersion, setAppVersion] = useState<string>('3.0.0');
+  const renderVersionInfo = () => {
+    let v = t('versionInfo');
+    v = v.replace('3.0.0', appVersion);
+    if (posture?.os_family) {
+      v = v.replace('(Linux)', `(${posture.os_family})`);
+    }
+    return v;
+  };
   const [customExtId, setCustomExtId] = useState<string>('');
   const [showExtSettings, setShowExtSettings] = useState<boolean>(false);
   const [installingExt, setInstallingExt] = useState<boolean>(false);
@@ -1001,7 +1009,7 @@ export default function App() {
           <div className="sidebar-footer">
             <div className="agent-info">
               <IconInfoCircle size={14} />
-              <span>{t('versionInfo').replace('3.0.0', appVersion)}</span>
+              <span>{renderVersionInfo()}</span>
             </div>
             <button 
               className="btn btn-secondary pin-sidebar-btn" 
@@ -1669,7 +1677,7 @@ export default function App() {
                 <p className="settings-section-desc">{t('updateDesc')}</p>
                 <div className="update-card-row">
                   <div style={{ fontSize: '13px', color: 'var(--text-secondary)' }}>
-                    <span>{t('versionInfo').replace('3.0.0', appVersion)}</span>
+                    <span>{renderVersionInfo()}</span>
                   </div>
                   <button 
                     onClick={async () => {

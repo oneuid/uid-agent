@@ -1109,11 +1109,20 @@ async fn check_for_updates() -> Result<String, String> {
             "https://github.com/oneuid/uid-agent/releases/download/v{}/uid-agent-desktop_{}_x64_en-US.msi",
             latest_version, latest_version
         );
+        let script = format!(
+            "[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12 -bor [Net.SecurityProtocolType]::Tls13; \
+             $ProgressPreference = 'SilentlyContinue'; \
+             $msiPath = Join-Path $env:TEMP 'uid-agent-update.msi'; \
+             try {{ Remove-Item $msiPath -Force -ErrorAction SilentlyContinue }} catch {{}}; \
+             Invoke-WebRequest -Uri '{}' -OutFile $msiPath; \
+             Start-Process msiexec.exe -ArgumentList '/i', $msiPath, '/passive' -Verb RunAs",
+            msi_url
+        );
         let status = new_command("powershell")
             .args([
                 "-NoProfile",
                 "-Command",
-                &format!("Start-Process msiexec.exe -ArgumentList '/i \"{}\" /passive' -Verb RunAs", msi_url)
+                &script
             ])
             .status();
 

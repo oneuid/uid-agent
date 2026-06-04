@@ -594,12 +594,23 @@ fn get_driver_paths() -> Vec<String> {
 #[cfg(target_os = "windows")]
 fn get_windows_store_certificates() -> Option<Vec<serde_json::Value>> {
     let script = r#"
-        $ErrorActionPreference = 'Stop'
-        $certs = Get-ChildItem -Path Cert:\CurrentUser\My | Where-Object { $_.HasPrivateKey }
+        $ErrorActionPreference = 'SilentlyContinue'
+        $certs = Get-ChildItem -Path Cert:\CurrentUser\My -ErrorAction SilentlyContinue
         $result = @()
         if ($certs) {
             foreach ($cert in $certs) {
                 try {
+                    $hasKey = $false
+                    try {
+                        $hasKey = $cert.HasPrivateKey
+                    } catch {}
+                    if (-not $hasKey) { continue }
+
+                    # Skip self-signed localhost / dev certificates to avoid cluttering with dev certs
+                    if ($cert.Subject -eq $cert.Issuer -and ($cert.Subject -like "*localhost*" -or $cert.Subject -like "*127.0.0.1*" -or $cert.Subject -like "*IIS Express*")) {
+                        continue
+                    }
+
                     $hex = [System.BitConverter]::ToString($cert.RawData).Replace("-", "").ToLower()
                     $result += [PSCustomObject]@{
                         id = "win_" + $cert.Thumbprint
@@ -625,9 +636,16 @@ fn get_windows_store_certificates() -> Option<Vec<serde_json::Value>> {
 
     if output.status.success() {
         let stdout = String::from_utf8_lossy(&output.stdout);
-        let parsed: serde_json::Value = serde_json::from_str(stdout.trim()).ok()?;
-        if let Some(arr) = parsed.as_array() {
-            return Some(arr.clone());
+        let trimmed = stdout.trim();
+        if trimmed.is_empty() {
+            return Some(Vec::new());
+        }
+        if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(trimmed) {
+            if let Some(arr) = parsed.as_array() {
+                return Some(arr.clone());
+            } else if parsed.is_object() {
+                return Some(vec![parsed]);
+            }
         }
     }
     None
