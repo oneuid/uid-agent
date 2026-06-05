@@ -197,5 +197,108 @@ if [ -f "$BIN_DIR/uid-agent" ]; then
     echo "  Check daemon status:  systemctl --user status uid-agent.service"
 fi
 
+# -------------------------------------------------------------
+# OS Context Menu Setup (Sign with UID)
+# -------------------------------------------------------------
+echo "[uid-agent] Installing 'Sign with UID' OS context menu integration..."
+
+# 1. Install wrapper launcher script
+cat << 'LAUNCHER_EOF' > "$BIN_DIR/uid-sign-file"
+#!/usr/bin/env bash
+# UID Digital Signature file launcher wrapper
+set -e
+
+FILE_PATH="$1"
+if [ -z "$FILE_PATH" ]; then
+    echo "Usage: uid-sign-file <pdf_file_path>"
+    exit 1
+fi
+
+ABS_PATH=$(realpath "$FILE_PATH")
+
+# Find a supported Chromium-based browser
+BROWSER_CMD=""
+for b in google-chrome chromium brave-browser microsoft-edge; do
+    if command -v "$b" >/dev/null 2>&1; then
+        BROWSER_CMD="$b"
+        break
+    fi
+done
+
+if [ -z "$BROWSER_CMD" ]; then
+    if command -v zenity >/dev/null 2>&1; then
+        zenity --error --text="No supported Chromium-based browser (Chrome, Chromium, Brave, Edge) was found. Please install one to use Sign with UID."
+    elif command -v notify-send >/dev/null 2>&1; then
+        notify-send "Sign with UID Error" "No supported browser found."
+    else
+        echo "Error: No supported browser found."
+    fi
+    exit 1
+fi
+
+# Dynamically resolve Extension ID based on what the user has loaded in Chrome
+EXT_ID=$(python3 -c '
+import json, os, glob
+chrome_dir = os.path.expanduser("~/.config/google-chrome")
+paths = glob.glob(os.path.join(chrome_dir, "*", "Preferences"))
+target_keywords = ["uid-link/dist/chrome", "extensions/coobgfinhhjocjlhjiaegcfolhdgiinb", "uid-extension/dist"]
+resolved_id = None
+for kw in target_keywords:
+    for pref_path in paths:
+        try:
+            with open(pref_path, "r", encoding="utf-8") as f:
+                d = json.load(f)
+            extensions = d.get("extensions", {}).get("settings", {})
+            for ext_id, info in extensions.items():
+                path = info.get("path", "")
+                if kw in path:
+                    resolved_id = ext_id
+                    break
+        except Exception:
+            continue
+        if resolved_id:
+            break
+    if resolved_id:
+        break
+print(resolved_id or "coobgfinhhjocjlhjiaegcfolhdgiinb")
+' 2>/dev/null || echo "coobgfinhhjocjlhjiaegcfolhdgiinb")
+
+# Open extension PDF signer page
+exec "$BROWSER_CMD" "chrome-extension://$EXT_ID/pdf-signer.html?url=file://$ABS_PATH"
+LAUNCHER_EOF
+chmod +x "$BIN_DIR/uid-sign-file"
+
+# 2. Install desktop application association
+cat << DESKTOP_EOF > "$DESKTOP_DIR/uid-signer.desktop"
+[Desktop Entry]
+Type=Application
+Name=Sign with UID
+Comment=Digitally sign PDF documents using UID.one
+MimeType=application/pdf;
+Exec=$BIN_DIR/uid-sign-file %f
+Icon=uid-agent-desktop
+Terminal=false
+NoDisplay=false
+Categories=Utility;Security;
+DESKTOP_EOF
+chmod +x "$DESKTOP_DIR/uid-signer.desktop"
+
+# Register PDF mimetype association
+if command -v update-desktop-database &> /dev/null; then
+    update-desktop-database "$DESKTOP_DIR" || true
+fi
+
+# 3. Install GNOME Nautilus Script
+NAUTILUS_SCRIPTS_DIR="$HOME/.local/share/nautilus/scripts"
+mkdir -p "$NAUTILUS_SCRIPTS_DIR"
+cat << 'SCRIPT_EOF' > "$NAUTILUS_SCRIPTS_DIR/Sign with UID"
+#!/usr/bin/env bash
+# Nautilus Script to sign PDF files with UID
+for file in "$@"; do
+    uid-sign-file "$file" &
+done
+SCRIPT_EOF
+chmod +x "$NAUTILUS_SCRIPTS_DIR/Sign with UID"
+
 echo "[uid-agent] Installation completed successfully!"
 echo "  You can open UID Agent from your desktop Applications Menu."

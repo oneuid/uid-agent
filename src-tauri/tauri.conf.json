@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "uid-agent-desktop",
+  "productName": "UID Agent",
   "version": "3.0.15",
   "identifier": "one.uid.agent",
   "build": {

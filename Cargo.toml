@@ -17,3 +17,6 @@ hex = "0.4"
 # Windows-only: registry access + Win32 API surface for posture checks
 [target.'cfg(target_os = "windows")'.dependencies]
 winreg = "0.52"
+
+[build-dependencies]
+winres = "0.1.12"

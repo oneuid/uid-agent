@@ -611,6 +611,32 @@ fn get_windows_store_certificates() -> Option<Vec<serde_json::Value>> {
                         continue
                     }
 
+                    $subject = $cert.Subject
+                    $issuer = $cert.Issuer
+                    
+                    if ($subject -like "*MS-Organization-Access*" -or $subject -like "*MS-Organization-P2P-Access*" -or $subject -like "*localhost*" -or $subject -like "*127.0.0.1*") {
+                        continue
+                    }
+
+                    # CN/Subject must not be a GUID/UUID (e.g. CN=9e472a1e-8488-4bf8-b219-9134a413d07e)
+                    if ($subject -match "CN=[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}") {
+                        continue
+                    }
+                    if ($issuer -match "CN=[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}") {
+                        continue
+                    }
+
+                    # Issuer must contain CA/Cert/Sign/Trust or vendor names to confirm it's a real signing certificate
+                    $isCAIssuer = $false
+                    $caKeywords = @("CA", "Cert", "Trust", "Sign", "Viettel", "VNPT", "BKAV", "FPT", "MISA", "SmartSign", "Vina", "NewTel", "Nacencomm", "CA2")
+                    foreach ($kw in $caKeywords) {
+                        if ($issuer.ToLower().Contains($kw.ToLower())) {
+                            $isCAIssuer = $true
+                            break
+                        }
+                    }
+                    if (-not $isCAIssuer) { continue }
+
                     $hex = [System.BitConverter]::ToString($cert.RawData).Replace("-", "").ToLower()
                     $result += [PSCustomObject]@{
                         id = "win_" + $cert.Thumbprint
@@ -855,9 +881,27 @@ pub fn get_usb_certificates() -> Vec<serde_json::Value> {
     #[cfg(target_os = "windows")]
     {
         if let Some(win_certs) = get_windows_store_certificates() {
-            if !win_certs.is_empty() {
-                set_cached_certs(sig.clone(), win_certs.clone());
-                return win_certs;
+            let active_info = detect_active_driver_and_label();
+            let filtered_certs: Vec<serde_json::Value> = win_certs.into_iter().filter(|c| {
+                let issuer = c["issuer"].as_str().unwrap_or("").to_lowercase();
+                let subject = c["subject"].as_str().unwrap_or("").to_lowercase();
+                
+                if let Some((_, ref active_label, _)) = active_info {
+                    let lbl_lower = active_label.to_lowercase();
+                    let core_label = if let Some(dash_idx) = lbl_lower.find('-') {
+                        &lbl_lower[..dash_idx]
+                    } else {
+                        &lbl_lower
+                    };
+                    issuer.contains(core_label) || subject.contains(core_label)
+                } else {
+                    !sig.is_empty()
+                }
+            }).collect();
+
+            if !filtered_certs.is_empty() {
+                set_cached_certs(sig.clone(), filtered_certs.clone());
+                return filtered_certs;
             }
         }
     }
@@ -1537,31 +1581,36 @@ async fn handle_connection(mut stream: TcpStream, keys: Arc<AgentKeys>) -> Resul
 
             if cert_id.starts_with("usb_") || cert_id == "usb_auto_detected" || cert_id.is_empty() {
                 let mut resolved_pin = pin.to_string();
-                if resolved_pin.is_empty() {
-                    let label = if let Some((_, lbl, _)) = detect_active_driver_and_label() {
-                        lbl
-                    } else {
-                        "USB Token".to_string()
-                    };
-                    if let Some(gui_pin) = prompt_gui_pin(&label) {
-                        resolved_pin = gui_pin;
-                    } else {
-                        let err_json = json!({
-                            "success": false,
-                            "error": "Signing cancelled by user or PIN prompt failed"
-                        });
-                        let res_body = err_json.to_string();
-                        let response = format!(
-                            "HTTP/1.1 400 Bad Request\r\n\
-                             Access-Control-Allow-Origin: *\r\n\
-                             Content-Type: application/json\r\n\
-                             Content-Length: {}\r\n\
-                             Connection: close\r\n\r\n{}",
-                            res_body.len(),
-                            res_body
-                        );
-                        stream.write_all(response.as_bytes()).await?;
-                        return Ok(());
+                
+                // On non-Windows platforms, if the PIN is empty, prompt upfront since CLI has no GUI fallback
+                #[cfg(not(target_os = "windows"))]
+                {
+                    if resolved_pin.is_empty() {
+                        let label = if let Some((_, lbl, _)) = detect_active_driver_and_label() {
+                            lbl
+                        } else {
+                            "USB Token".to_string()
+                        };
+                        if let Some(gui_pin) = prompt_gui_pin(&label) {
+                            resolved_pin = gui_pin;
+                        } else {
+                            let err_json = json!({
+                                "success": false,
+                                "error": "Signing cancelled by user or PIN prompt failed"
+                            });
+                            let res_body = err_json.to_string();
+                            let response = format!(
+                                "HTTP/1.1 400 Bad Request\r\n\
+                                 Access-Control-Allow-Origin: *\r\n\
+                                 Content-Type: application/json\r\n\
+                                 Content-Length: {}\r\n\
+                                 Connection: close\r\n\r\n{}",
+                                res_body.len(),
+                                res_body
+                            );
+                            stream.write_all(response.as_bytes()).await?;
+                            return Ok(());
+                        }
                     }
                 }
 
@@ -1586,17 +1635,58 @@ async fn handle_connection(mut stream: TcpStream, keys: Arc<AgentKeys>) -> Resul
                     if is_probe {
                         // Probe: just read certificate after logging in (no signing required)
                         let temp_cert_path = format!("{}/temp_cert_{}.der", dot_uid, raw_id);
-                        let read_output = new_command(get_pkcs11_tool_path(Some(&driver)))
-                            .args([
-                                "--module", &driver,
-                                "--login",
-                                "--pin", &resolved_pin,
-                                "--read-object",
-                                "--type", "cert",
-                                "--id", &raw_id,
-                                "--output-file", &temp_cert_path
-                            ])
+                        
+                        let mut probe_args = vec![
+                            "--module", &driver,
+                            "--login",
+                        ];
+                        if !resolved_pin.is_empty() {
+                            probe_args.push("--pin");
+                            probe_args.push(&resolved_pin);
+                        } else {
+                            #[cfg(target_os = "windows")]
+                            {
+                                probe_args.push("--pin");
+                                probe_args.push("");
+                            }
+                        }
+                        probe_args.extend_from_slice(&[
+                            "--read-object",
+                            "--type", "cert",
+                            "--id", &raw_id,
+                            "--output-file", &temp_cert_path
+                        ]);
+
+                        #[allow(unused_mut)]
+                        let mut read_output = new_command(get_pkcs11_tool_path(Some(&driver)))
+                            .args(&probe_args)
                             .output();
+                            
+                        #[cfg(target_os = "windows")]
+                        {
+                            if resolved_pin.is_empty() && (read_output.is_err() || !read_output.as_ref().unwrap().status.success()) {
+                                let label = if let Some((_, lbl, _)) = detect_active_driver_and_label() {
+                                    lbl
+                                } else {
+                                    "USB Token".to_string()
+                                };
+                                if let Some(gui_pin) = prompt_gui_pin(&label) {
+                                    resolved_pin = gui_pin;
+                                    let mut retry_probe_args = vec![
+                                        "--module", &driver,
+                                        "--login",
+                                        "--pin", &resolved_pin,
+                                        "--read-object",
+                                        "--type", "cert",
+                                        "--id", &raw_id,
+                                        "--output-file", &temp_cert_path
+                                    ];
+                                    read_output = new_command(get_pkcs11_tool_path(Some(&driver)))
+                                        .args(&retry_probe_args)
+                                        .output();
+                                }
+                             }
+                        }
                             
                         let mut read_ok = false;
                         if let Ok(ref out) = read_output {
@@ -1612,14 +1702,27 @@ async fn handle_connection(mut stream: TcpStream, keys: Arc<AgentKeys>) -> Resul
 
                         if !read_ok && cert_id == "usb_auto_detected" {
                             // Fallback: list objects to find real ID
+                            let mut list_args = vec![
+                                "--module", &driver,
+                                "--login",
+                            ];
+                            if !resolved_pin.is_empty() {
+                                list_args.push("--pin");
+                                list_args.push(&resolved_pin);
+                            } else {
+                                #[cfg(target_os = "windows")]
+                                {
+                                    list_args.push("--pin");
+                                    list_args.push("");
+                                }
+                            }
+                            list_args.extend_from_slice(&[
+                                "--list-objects",
+                                "--type", "cert"
+                            ]);
+                            
                             let list_output = new_command(get_pkcs11_tool_path(Some(&driver)))
-                                .args([
-                                    "--module", &driver,
-                                    "--login",
-                                    "--pin", &resolved_pin,
-                                    "--list-objects",
-                                    "--type", "cert"
-                                ])
+                                .args(&list_args)
                                 .output();
                                 
                             let mut resolved_id = None;
@@ -1637,16 +1740,17 @@ async fn handle_connection(mut stream: TcpStream, keys: Arc<AgentKeys>) -> Resul
                             if let Some(rid) = resolved_id {
                                 raw_id = rid;
                                 let temp_cert_path2 = format!("{}/temp_cert_{}.der", dot_uid, raw_id);
+                                let read_args2 = vec![
+                                    "--module", &driver,
+                                    "--login",
+                                    "--pin", &resolved_pin,
+                                    "--read-object",
+                                    "--type", "cert",
+                                    "--id", &raw_id,
+                                    "--output-file", &temp_cert_path2
+                                ];
                                 let read_output2 = new_command(get_pkcs11_tool_path(Some(&driver)))
-                                    .args([
-                                        "--module", &driver,
-                                        "--login",
-                                        "--pin", &resolved_pin,
-                                        "--read-object",
-                                        "--type", "cert",
-                                        "--id", &raw_id,
-                                        "--output-file", &temp_cert_path2
-                                    ])
+                                    .args(&read_args2)
                                     .output();
                                     
                                 if let Ok(out) = read_output2 {
@@ -1680,19 +1784,60 @@ async fn handle_connection(mut stream: TcpStream, keys: Arc<AgentKeys>) -> Resul
                             
                             let _ = fs::write(&temp_hash_path, &hash_bytes);
                             
-                            let sign_output = new_command(get_pkcs11_tool_path(Some(&driver)))
-                                .args([
-                                    "--module", &driver,
-                                    "--login",
-                                    "--pin", &resolved_pin,
-                                    "--sign",
-                                    "--id", &raw_id,
-                                    "--mechanism", "RSA-PKCS",
-                                    "--input-file", &temp_hash_path,
-                                    "--output-file", &temp_sig_path
-                                ])
+                            let mut sign_args = vec![
+                                "--module", &driver,
+                                "--login",
+                            ];
+                            if !resolved_pin.is_empty() {
+                                sign_args.push("--pin");
+                                sign_args.push(&resolved_pin);
+                            } else {
+                                #[cfg(target_os = "windows")]
+                                {
+                                    sign_args.push("--pin");
+                                    sign_args.push("");
+                                }
+                            }
+                            sign_args.extend_from_slice(&[
+                                "--sign",
+                                "--id", &raw_id,
+                                "--mechanism", "RSA-PKCS",
+                                "--input-file", &temp_hash_path,
+                                "--output-file", &temp_sig_path
+                            ]);
+
+                            #[allow(unused_mut)]
+                            let mut sign_output = new_command(get_pkcs11_tool_path(Some(&driver)))
+                                .args(&sign_args)
                                 .output();
                                 
+                            #[cfg(target_os = "windows")]
+                            {
+                                if resolved_pin.is_empty() && (sign_output.is_err() || !sign_output.as_ref().unwrap().status.success()) {
+                                    let label = if let Some((_, lbl, _)) = detect_active_driver_and_label() {
+                                        lbl
+                                    } else {
+                                        "USB Token".to_string()
+                                    };
+                                    if let Some(gui_pin) = prompt_gui_pin(&label) {
+                                        resolved_pin = gui_pin;
+                                        let mut retry_sign_args = vec![
+                                            "--module", &driver,
+                                            "--login",
+                                            "--pin", &resolved_pin,
+                                            "--sign",
+                                            "--id", &raw_id,
+                                            "--mechanism", "RSA-PKCS",
+                                            "--input-file", &temp_hash_path,
+                                            "--output-file", &temp_sig_path
+                                        ];
+                                        sign_output = new_command(get_pkcs11_tool_path(Some(&driver)))
+                                            .args(&retry_sign_args)
+                                            .output();
+                                    }
+                                }
+                            }
+                            
                             let _ = fs::remove_file(&temp_hash_path);
                             
                             match sign_output {

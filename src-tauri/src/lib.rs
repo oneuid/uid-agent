@@ -90,6 +90,41 @@ async fn open_browser_url(url: String) -> Result<(), String> {
 }
 
 #[tauri::command]
+async fn open_login_window(app_handle: tauri::AppHandle) -> Result<(), String> {
+    if let Some(window) = app_handle.get_webview_window("login") {
+        let _ = window.set_focus();
+        return Ok(());
+    }
+
+    let url_str = "https://uid.one/login";
+    let window = tauri::WebviewWindowBuilder::new(
+        &app_handle,
+        "login",
+        tauri::WebviewUrl::External(url_str.parse().map_err(|e| format!("Invalid URL: {}", e))?)
+    )
+    .title("Sign In to UID.one")
+    .inner_size(500.0, 700.0)
+    .resizable(true)
+    .build();
+
+    match window {
+        Ok(win) => {
+            let _ = win.set_focus();
+            Ok(())
+        }
+        Err(e) => Err(e.to_string()),
+    }
+}
+
+#[tauri::command]
+async fn close_login_window(app_handle: tauri::AppHandle) -> Result<(), String> {
+    if let Some(window) = app_handle.get_webview_window("login") {
+        let _ = window.close();
+    }
+    Ok(())
+}
+
+#[tauri::command]
 async fn show_notification(title: String, body: String) -> Result<(), String> {
     #[cfg(target_os = "windows")]
     {
@@ -653,7 +688,7 @@ fn get_workspace_app(app_id: &str) -> Option<WorkspaceApp> {
         }),
         "misa" => Some(WorkspaceApp {
             name: "MISA Accounting",
-            url: "https://act.misa.vn/",
+            url: "https://amisapp.misa.vn/",
         }),
         "acrobat" => Some(WorkspaceApp {
             name: "Acrobat PDF Signer",
@@ -1115,6 +1150,7 @@ async fn check_for_updates() -> Result<String, String> {
              $msiPath = Join-Path $env:TEMP 'uid-agent-update.msi'; \
              try {{ Remove-Item $msiPath -Force -ErrorAction SilentlyContinue }} catch {{}}; \
              Invoke-WebRequest -Uri '{}' -OutFile $msiPath; \
+             try {{ Unblock-File -Path $msiPath -ErrorAction SilentlyContinue }} catch {{}}; \
              Start-Process msiexec.exe -ArgumentList '/i', $msiPath, '/passive' -Verb RunAs",
             msi_url
         );
@@ -1158,7 +1194,7 @@ async fn check_for_updates() -> Result<String, String> {
     }
 }
 
-const EMBEDDED_VERSION: &str = "1.3.1";
+const EMBEDDED_VERSION: &str = "1.3.2";
 
 fn parse_store_version(xml: &str) -> Option<String> {
     if let Some(idx) = xml.find("version=\"") {
@@ -1494,14 +1530,14 @@ async fn install_browser_extension(custom_chrome_id: Option<String>) -> Result<S
         if is_version_newer(&current_installed, &github_ver) || !target_dir.exists() {
             logs.push(format!("Upgrading Chrome Extension from v{} to v{}", current_installed, github_ver));
             let mut download_success = false;
-            let github_download_url = format!("https://github.com/oneuid/uid-extension/releases/download/v{}/uid-link-firefox.zip", github_ver);
+            let github_download_url = format!("https://github.com/oneuid/uid-extension/releases/download/v{}/uid-link-chrome.zip", github_ver);
             if download_file(&github_download_url, &zip_path).await.is_ok() {
                 download_success = true;
             }
 
             if !download_success {
                 logs.push("GitHub download unavailable. Packaging local embedded extension resource.".to_string());
-                let local_zip_bytes = include_bytes!("../resources/uid-link-firefox.zip");
+                let local_zip_bytes = include_bytes!("../resources/uid-link-chrome.zip");
                 let _ = std::fs::write(&zip_path, local_zip_bytes);
             }
 
@@ -1558,12 +1594,12 @@ async fn install_browser_extension(custom_chrome_id: Option<String>) -> Result<S
 
         if is_version_newer(&current_installed, &github_ver) || !target_dir.exists() {
             let mut download_success = false;
-            let github_download_url = format!("https://github.com/oneuid/uid-extension/releases/download/v{}/uid-link-firefox.zip", github_ver);
+            let github_download_url = format!("https://github.com/oneuid/uid-extension/releases/download/v{}/uid-link-chrome.zip", github_ver);
             if download_file(&github_download_url, &zip_path).await.is_ok() {
                 download_success = true;
             }
             if !download_success {
-                let local_zip_bytes = include_bytes!("../resources/uid-link-firefox.zip");
+                let local_zip_bytes = include_bytes!("../resources/uid-link-chrome.zip");
                 let _ = std::fs::write(&zip_path, local_zip_bytes);
             }
             let _ = std::fs::remove_dir_all(&target_dir);
@@ -1890,6 +1926,8 @@ pub fn run() {
             get_user_profile,
             logout_user,
             open_browser_url,
+            open_login_window,
+            close_login_window,
             show_notification,
             launch_sandbox_app,
             sync_sandbox_profile,

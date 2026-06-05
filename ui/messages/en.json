@@ -254,5 +254,17 @@
   "tpmAttestation": "Attestation Mode",
   "auditReportHeader": "UID Agent Device Security Audit Report",
   "maintenanceTitle": "Diagnostics & Local Port Debugger",
-  "maintenanceDesc": "Real-time connectivity verification for background processes and browser integration hosts."
+  "maintenanceDesc": "Real-time connectivity verification for background processes and browser integration hosts.",
+  "dashboardStatusSecure": "Secured & Compliant",
+  "dashboardStatusRisk": "Security Risk Detected",
+  "dashboardStatusDescAll": "All {count} security checks have been evaluated. 0 risks found.",
+  "dashboardStatusDescSome": "Evaluated {total} checks. {compliant}/{total} compliant. Click individual cards to remediate.",
+  "activeHardware": "Active Hardware State",
+  "activeUsbToken": "USB Security Token: {name} connected",
+  "noUsbToken": "No hardware security tokens detected.",
+  "btnVerifyConnection": "Verify Connection",
+  "btnCheckUpdates": "Check for Updates",
+  "verifyingConnection": "Verifying...",
+  "verifySuccess": "Successfully connected to UID Security Cloud.",
+  "verifyFailed": "Connection to UID Security Cloud failed. Please check your network."
 }

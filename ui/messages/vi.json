@@ -254,5 +254,17 @@
   "tpmAttestation": "Chế độ Xác thực",
   "auditReportHeader": "Báo cáo Kiểm toán An ninh Thiết bị UID Agent",
   "maintenanceTitle": "Chẩn đoán & Gỡ lỗi Cổng Cục bộ",
-  "maintenanceDesc": "Xác minh kết nối thời gian thực cho các tiến trình chạy ẩn và máy chủ tích hợp trình duyệt."
+  "maintenanceDesc": "Xác minh kết nối thời gian thực cho các tiến trình chạy ẩn và máy chủ tích hợp trình duyệt.",
+  "dashboardStatusSecure": "Được Bảo vệ & Tuân thủ",
+  "dashboardStatusRisk": "Phát hiện Rủi ro Bảo mật",
+  "dashboardStatusDescAll": "Tất cả {count} chốt kiểm soát an ninh đã được đánh giá. 0 rủi ro.",
+  "dashboardStatusDescSome": "Đã đánh giá {total} chốt kiểm soát. {compliant}/{total} tuân thủ. Nhấp vào các thẻ để khắc phục.",
+  "activeHardware": "Trạng thái Phần cứng Hoạt động",
+  "activeUsbToken": "USB bảo mật: Đã kết nối {name}",
+  "noUsbToken": "Không phát hiện USB bảo mật phần cứng nào.",
+  "btnVerifyConnection": "Xác minh kết nối",
+  "btnCheckUpdates": "Kiểm tra Cập nhật",
+  "verifyingConnection": "Đang xác minh...",
+  "verifySuccess": "Kết nối thành công tới Đám mây Bảo mật UID.",
+  "verifyFailed": "Kết nối tới Đám mây Bảo mật UID thất bại. Vui lòng kiểm tra lại mạng."
 }

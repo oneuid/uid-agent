@@ -32,6 +32,7 @@ if (-not (Test-Path $SourceExe -ErrorAction SilentlyContinue)) {
     $Uri = "https://raw.githubusercontent.com/oneuid/uid-agent/main/uid-agent.exe"
     try {
         Invoke-WebRequest -Uri $Uri -OutFile $SourceExe -UseBasicParsing
+        try { Unblock-File -Path $SourceExe -ErrorAction SilentlyContinue } catch {}
     } catch {
         Write-Warning "[uid-agent] Failed to download precompiled Windows binary from GitHub (HTTP 404/Connection Error)."
         Write-Warning "To install without compiling, please compile 'uid-agent.exe' and commit/push it to the root of the 'uid-agent' GitHub repository."
@@ -106,6 +107,7 @@ Start-Sleep -Seconds 1
 # Copy binary to LocalAppData
 $DestExe = Join-Path $InstallDir "uid-agent.exe"
 Copy-Item -Path $SourceExe -Destination $DestExe -Force
+try { Unblock-File -Path $DestExe -ErrorAction SilentlyContinue } catch {}
 Write-Host "[uid-agent] Copied executable to $DestExe"
 
 # Register to run at startup via HKCU Run registry key

@@ -119,6 +119,8 @@ interface SignatureHistoryEntry {
   referer: string;
 }
 
+export const AGENT_VERSION = '3.0.15';
+
 export default function App() {
   const [activeTab, setActiveTab] = useState<'dashboard' | 'tokens' | 'apps' | 'approvals' | 'settings'>('dashboard');
   const [userProfile, setUserProfile] = useState<UserProfile | null>(null);
@@ -135,7 +137,8 @@ export default function App() {
   const loading = false;
   const [log, setLog] = useState<string>('');
   const [checkingUpdate, setCheckingUpdate] = useState<boolean>(false);
-  const [appVersion, setAppVersion] = useState<string>('3.0.0');
+  const [verifyingConnection, setVerifyingConnection] = useState<boolean>(false);
+  const [appVersion, setAppVersion] = useState<string>(AGENT_VERSION);
   const renderVersionInfo = () => {
     let v = t('versionInfo');
     v = v.replace('3.0.0', appVersion);
@@ -230,7 +233,7 @@ export default function App() {
       name: 'MISA Accounting',
       description: 'Isolated accounting workspace. Prevents invoice session sniffing and keeps ledger tokens secure.',
       status: 'not_configured',
-      url: 'https://act.misa.com.vn/',
+      url: 'https://amisapp.misa.vn/',
       logs: []
     },
     {
@@ -510,6 +513,13 @@ export default function App() {
         }
 
         try {
+          const certsData = await invoke<Certificate[]>('get_certificates');
+          setCerts(certsData);
+        } catch (err) {
+          console.warn('Failed to load certificates on mount:', err);
+        }
+
+        try {
           const tpm = await invoke<TpmInfo>('get_tpm_info');
           setTpmInfo(tpm);
         } catch (err) {
@@ -695,6 +705,9 @@ export default function App() {
         setUserProfile(prev => {
           // Compare objects to avoid trigger state updates/re-renders if same
           if (JSON.stringify(prev) !== JSON.stringify(profile)) {
+            if (profile && !prev) {
+              invoke('close_login_window').catch(() => {});
+            }
             return profile;
           }
           return prev;
@@ -745,6 +758,41 @@ export default function App() {
     }
   };
 
+  const handleCheckUpdate = async () => {
+    setCheckingUpdate(true);
+    setLog('Checking for software updates...');
+    try {
+      const res = await invoke<string>('check_for_updates');
+      setLog(`${t('updateSuccess').replace('3.0.0', appVersion)} (Status: ${res})`);
+      showToast(res, 'info');
+    } catch (e: any) {
+      setLog(`Update check failed: ${e}`);
+      showToast(`Update check failed: ${e}`, 'error');
+    } finally {
+      setCheckingUpdate(false);
+    }
+  };
+
+  const handleVerifyConnection = async () => {
+    setVerifyingConnection(true);
+    try {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 6000);
+      await fetch('https://api.uid.one/', {
+        method: 'GET',
+        mode: 'no-cors',
+        signal: controller.signal
+      });
+      clearTimeout(timeoutId);
+      showToast(t('verifySuccess'), 'success');
+    } catch (e: any) {
+      console.warn('Connection check failed:', e);
+      showToast(t('verifyFailed'), 'error');
+    } finally {
+      setVerifyingConnection(false);
+    }
+  };
+
   const handleRemediateFirewall = async () => {
     setRemediatingMap(prev => ({ ...prev, firewall: true }));
     try {
@@ -789,10 +837,15 @@ export default function App() {
 
   const handleConnectAccount = async () => {
     try {
-      await invoke('open_browser_url', { url: 'https://uid.one' });
-      setLog("Opened login page in browser. Once logged in, your account will automatically sync here.");
+      await invoke('open_login_window');
+      setLog("Opened secure login window. Once logged in, your account will automatically sync here.");
     } catch (e: any) {
-      setLog(`Failed to open login page: ${e}`);
+      setLog(`Failed to open login window, falling back to browser: ${e}`);
+      try {
+        await invoke('open_browser_url', { url: 'https://uid.one' });
+      } catch (err) {
+        console.error('Browser fallback failed:', err);
+      }
     }
   };
 
@@ -816,9 +869,27 @@ export default function App() {
       const res = await invoke<string>('install_browser_extension', { 
         customChromeId: customExtId || null 
       });
-      setLog(`${t('extensionInstallSuccess')}\n\nDetails:\n${res}`);
+      
+      const match = res.match(/unpacked successfully at:\s*(.+)/i);
+      const extPath = match ? match[1].trim() : '/home/s/.config/uid/extensions/coobgfinhhjocjlhjiaegcfolhdgiinb';
+      
+      try {
+        await navigator.clipboard.writeText(extPath);
+      } catch (clipboardErr) {
+        console.warn('Clipboard write failed:', clipboardErr);
+      }
+
+      setLog(`${t('extensionInstallSuccess')}\n\nDetails:\n${res}\n\n` + 
+             `[ACTION REQUIRED] Since the extension is not yet published to the Chrome Web Store, you must load it manually:\n` +
+             `1. Open chrome://extensions/ in your browser.\n` +
+             `2. Turn ON "Developer mode" in the top-right.\n` +
+             `3. Click "Load unpacked" in the top-left.\n` +
+             `4. Paste the extension path (already copied to your clipboard):\n   ${extPath}\n\n` +
+             `Once loaded, the browser extension will connect automatically.`);
+      showToast("Extension unpacked. Path copied to clipboard!", "success");
     } catch (e: any) {
       setLog(`${t('extensionInstallFailed').replace('{error}', e)}`);
+      showToast("Extension installation failed", "error");
     } finally {
       setInstallingExt(false);
     }
@@ -1028,6 +1099,109 @@ export default function App() {
             <div className="tab-pane">
               <h2 className="section-title">{t('postureTitle')}</h2>
               <p className="section-subtitle">{t('postureSubtitle')}</p>
+
+              {/* Security Status Summary Guard */}
+              {(() => {
+                const totalChecks = 6;
+                const compliantCount = (posture?.disk_encrypted ? 1 : 0) +
+                                       (posture?.firewall_status === 'active' ? 1 : 0) +
+                                       (posture?.secure_boot ? 1 : 0) +
+                                       (posture?.screen_lock_active ? 1 : 0) +
+                                       (posture?.ssh_keys_secure ? 1 : 0) +
+                                       (posture?.vpn_active ? 1 : 0);
+                const isAllCompliant = compliantCount === totalChecks;
+                const activeToken = certs.length > 0 ? certs[0] : null;
+
+                return (
+                  <div style={{
+                    background: isAllCompliant ? 'rgba(16, 185, 129, 0.08)' : 'rgba(245, 158, 11, 0.08)',
+                    border: `1px solid ${isAllCompliant ? 'rgba(16, 185, 129, 0.25)' : 'rgba(245, 158, 11, 0.25)'}`,
+                    borderRadius: '16px',
+                    padding: '20px 24px',
+                    margin: '24px 0 28px 0',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    gap: '24px',
+                    boxShadow: '0 4px 20px rgba(0, 0, 0, 0.15)',
+                    backdropFilter: 'blur(20px)',
+                    transition: 'all 0.3s ease'
+                  }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '20px', flex: 1 }}>
+                      <div style={{
+                        width: '56px',
+                        height: '56px',
+                        borderRadius: '50%',
+                        background: isAllCompliant ? 'rgba(16, 185, 129, 0.15)' : 'rgba(245, 158, 11, 0.15)',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        color: isAllCompliant ? 'var(--success-color)' : 'var(--warning-color)',
+                        boxShadow: `0 0 20px ${isAllCompliant ? 'rgba(16, 185, 129, 0.2)' : 'rgba(245, 158, 11, 0.2)'}`,
+                        flexShrink: 0
+                      }}>
+                        {isAllCompliant ? <IconShieldCheck size={32} /> : <IconAlertTriangle size={32} />}
+                      </div>
+                      <div>
+                        <h3 style={{ margin: 0, fontSize: '16px', fontWeight: '700', color: 'white' }}>
+                          {isAllCompliant ? t('dashboardStatusSecure') : t('dashboardStatusRisk')}
+                        </h3>
+                        <p style={{ margin: '4px 0 8px 0', fontSize: '13px', color: 'var(--text-secondary)' }}>
+                          {isAllCompliant 
+                            ? t('dashboardStatusDescAll').replace('{count}', String(totalChecks))
+                            : t('dashboardStatusDescSome').replace('{compliant}', String(compliantCount)).replace('{total}', String(totalChecks))
+                          }
+                        </p>
+                        
+                        {/* Active Hardware State */}
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '12px', color: 'var(--text-muted)' }}>
+                          <IconDeviceUsb size={14} className={activeToken ? 'gold-icon' : 'gray-icon'} />
+                          <span>
+                            {activeToken 
+                              ? t('activeUsbToken').replace('{name}', activeToken.issuer || activeToken.subject || 'PKCS#11 Token') 
+                              : t('noUsbToken')
+                            }
+                          </span>
+                        </div>
+                      </div>
+                    </div>
+                    
+                    <div style={{ display: 'flex', gap: '12px', flexShrink: 0 }}>
+                      <button 
+                        onClick={handleVerifyConnection}
+                        disabled={verifyingConnection}
+                        className="btn btn-secondary"
+                        style={{ fontSize: '12px', padding: '10px 18px', height: '40px', display: 'flex', alignItems: 'center', gap: '6px' }}
+                      >
+                        {verifyingConnection ? (
+                          <>
+                            <IconLoader2 size={14} className="animate-spin" />
+                            <span>{t('verifyingConnection')}</span>
+                          </>
+                        ) : (
+                          <span>{t('btnVerifyConnection')}</span>
+                        )}
+                      </button>
+                      
+                      <button 
+                        onClick={handleCheckUpdate}
+                        disabled={checkingUpdate}
+                        className="btn btn-secondary"
+                        style={{ fontSize: '12px', padding: '10px 18px', height: '40px', display: 'flex', alignItems: 'center', gap: '6px' }}
+                      >
+                        {checkingUpdate ? (
+                          <>
+                            <IconLoader2 size={14} className="animate-spin" />
+                            <span>{t('btnUpdating')}</span>
+                          </>
+                        ) : (
+                          <span>{t('btnCheckUpdates')}</span>
+                        )}
+                      </button>
+                    </div>
+                  </div>
+                );
+              })()}
 
               <h4 className="posture-group-title" style={{ margin: '32px 0 16px 0', fontSize: '13px', fontWeight: '700', color: 'var(--accent-gold)', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
                 {t('basicChecksGroup')}
@@ -1679,19 +1853,8 @@ export default function App() {
                   <div style={{ fontSize: '13px', color: 'var(--text-secondary)' }}>
                     <span>{renderVersionInfo()}</span>
                   </div>
-                  <button 
-                    onClick={async () => {
-                      setCheckingUpdate(true);
-                      setLog('Checking for software updates...');
-                      try {
-                        const res = await invoke<string>('check_for_updates');
-                        setLog(`${t('updateSuccess').replace('3.0.0', appVersion)} (Status: ${res})`);
-                      } catch (e: any) {
-                        setLog(`Update check failed: ${e}`);
-                      } finally {
-                        setCheckingUpdate(false);
-                      }
-                    }}
+                   <button 
+                    onClick={handleCheckUpdate}
                     className="btn btn-secondary"
                     disabled={checkingUpdate || loading}
                   >
