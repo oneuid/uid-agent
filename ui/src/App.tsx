@@ -100,6 +100,7 @@ interface Posture {
   screen_lock_active?: boolean;
   ssh_keys_secure?: boolean;
   vpn_active?: boolean;
+  anti_keylogger_active?: boolean;
 }
 
 interface UserProfile {
@@ -155,6 +156,7 @@ export default function App() {
   const [showSecureBootWizard, setShowSecureBootWizard] = useState<boolean>(false);
   const [showSSHKeysWizard, setShowSSHKeysWizard] = useState<boolean>(false);
   const [showVPNWizard, setShowVPNWizard] = useState<boolean>(false);
+  const [showKeyloggerWizard, setShowKeyloggerWizard] = useState<boolean>(false);
   const [remediatingMap, setRemediatingMap] = useState<Record<string, boolean>>({});
   const [isSyncing, setIsSyncing] = useState<Record<string, boolean>>({});
   const [syncStatus, setSyncStatus] = useState<Record<string, string>>(() => {
@@ -455,28 +457,33 @@ export default function App() {
     }
   };
 
-  const handleApproveRequest = (reqId: string) => {
-    setPendingApprovals(prev => prev.map(req => {
-      if (req.id === reqId) {
-        return { ...req, isSigning: true };
+  const handleApproveRequest = async (reqId: string) => {
+    const req = pendingApprovals.find(r => r.id === reqId);
+    if (!req) return;
+
+    setPendingApprovals(prev => prev.map(r => {
+      if (r.id === reqId) {
+        return { ...r, isSigning: true };
       }
-      return req;
+      return r;
     }));
 
-    setTimeout(async () => {
-      const req = pendingApprovals.find(r => r.id === reqId);
-      if (req && req.type === 'sign_document') {
-        const historyEntry: SignatureHistoryEntry = {
-          timestamp: new Date().toISOString(),
-          cert_id: 'HSM-ATTEST-01',
-          subject: 'CN=Admin UID, O=UID.one, C=VN',
-          hash: req.payload,
-          status: 'Success',
-          origin: req.origin,
-          referer: req.origin
-        };
-        setSigHistory(prev => [historyEntry, ...prev]);
-      }
+    try {
+      // Call native user biometric verification or system authorization dialog.
+      await invoke('authenticate_user_presence', {
+        reason: `Authorize signing payload: ${req.title} (${req.origin})`
+      });
+
+      const historyEntry: SignatureHistoryEntry = {
+        timestamp: new Date().toISOString(),
+        cert_id: certs.length > 0 ? certs[0].serial || 'PLATFORM-KEY-01' : 'PLATFORM-KEY-01',
+        subject: certs.length > 0 ? certs[0].subject || 'CN=Platform Key' : 'CN=Platform Key, O=UID.one',
+        hash: req.payload,
+        status: 'Success',
+        origin: req.origin,
+        referer: req.origin
+      };
+      setSigHistory(prev => [historyEntry, ...prev]);
 
       setPendingApprovals(prev => prev.map(r => {
         if (r.id === reqId) {
@@ -488,7 +495,16 @@ export default function App() {
       setTimeout(() => {
         setPendingApprovals(prev => prev.filter(r => r.id !== reqId));
       }, 1000);
-    }, 1500);
+      showToast(t('attestationSignedSuccess'), 'success');
+    } catch (err) {
+      setPendingApprovals(prev => prev.map(r => {
+        if (r.id === reqId) {
+          return { ...r, isSigning: false };
+        }
+        return r;
+      }));
+      showToast(String(err) || 'Biometric verification failed', 'error');
+    }
   };
 
   const handleRejectRequest = (reqId: string) => {
@@ -627,6 +643,13 @@ export default function App() {
       'VPN connection established. Remote network traffic is secured.',
       'VPN disconnected. Remote network access is exposed to public routing.'
     );
+    checkChange(
+      'antiKeylogger',
+      prevPosture.anti_keylogger_active,
+      posture.anti_keylogger_active,
+      'Anti-keylogger keyboard input scrambling/isolation protection is active.',
+      'Anti-keylogger input scrambling/isolation protection is not active or configured.'
+    );
 
     if (newEvents.length > 0) {
       setComplianceEvents(prev => {
@@ -657,6 +680,7 @@ export default function App() {
         screen_lock: posture.screen_lock_active ? 'COMPLIANT' : 'NON-COMPLIANT',
         ssh_keys: posture.ssh_keys_secure ? 'COMPLIANT' : 'NON-COMPLIANT',
         vpn: posture.vpn_active ? 'SECURED' : 'UNSECURED',
+        anti_keylogger: posture.anti_keylogger_active ? 'COMPLIANT' : 'NON-COMPLIANT',
       },
       audit_events_history: complianceEvents,
     };
@@ -1102,13 +1126,14 @@ export default function App() {
 
               {/* Security Status Summary Guard */}
               {(() => {
-                const totalChecks = 6;
+                const totalChecks = 7;
                 const compliantCount = (posture?.disk_encrypted ? 1 : 0) +
                                        (posture?.firewall_status === 'active' ? 1 : 0) +
                                        (posture?.secure_boot ? 1 : 0) +
                                        (posture?.screen_lock_active ? 1 : 0) +
                                        (posture?.ssh_keys_secure ? 1 : 0) +
-                                       (posture?.vpn_active ? 1 : 0);
+                                       (posture?.vpn_active ? 1 : 0) +
+                                       (posture?.anti_keylogger_active ? 1 : 0);
                 const isAllCompliant = compliantCount === totalChecks;
                 const activeToken = certs.length > 0 ? certs[0] : null;
 
@@ -1350,6 +1375,32 @@ export default function App() {
                         style={{ marginTop: '16px', padding: '6px 12px', fontSize: '12px', alignSelf: 'flex-start' }}
                       >
                         {t('btnRemediateSSHKeys')}
+                      </button>
+                    )}
+                  </div>
+                </div>
+
+                <div className="posture-card">
+                  <div className="card-header">
+                    <h3>{t('antiKeyloggerHeader')}</h3>
+                    {posture?.anti_keylogger_active ? (
+                      <IconShieldCheck size={20} className="green-icon" />
+                    ) : (
+                      <IconAlertCircle size={20} className="gold-icon" />
+                    )}
+                  </div>
+                  <div className="card-body" style={{ display: 'flex', flexDirection: 'column', height: '100%', justifyContent: 'space-between' }}>
+                    <div>
+                      <p className="value">{posture?.anti_keylogger_active ? t('antiKeyloggerActive') : t('antiKeyloggerDisabled')}</p>
+                      <p className="label">{t('antiKeyloggerDesc')}</p>
+                    </div>
+                    {!posture?.anti_keylogger_active && (
+                      <button 
+                        className="btn btn-secondary"
+                        onClick={() => setShowKeyloggerWizard(true)}
+                        style={{ marginTop: '16px', padding: '6px 12px', fontSize: '12px', alignSelf: 'flex-start' }}
+                      >
+                        {t('btnRemediateKeylogger')}
                       </button>
                     )}
                   </div>
@@ -2660,6 +2711,55 @@ export default function App() {
 
             <div className="modal-actions" style={{ borderTop: '1px solid var(--border-color)', paddingTop: '16px', display: 'flex', justifyContent: 'flex-end' }}>
               <button className="btn btn-primary" onClick={() => setShowVPNWizard(false)}>
+                {t('btnConfirm')}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showKeyloggerWizard && (
+        <div className="modal-overlay">
+          <div className="modal-content glassmorphism" style={{ maxWidth: '600px', width: '90%' }}>
+            <div className="modal-header">
+              <h3>{t('keyloggerWizardTitle')}</h3>
+              <button className="close-modal-btn" onClick={() => setShowKeyloggerWizard(false)}>
+                <IconX size={20} />
+              </button>
+            </div>
+            
+            <div className="modal-body" style={{ color: 'var(--text-secondary)', padding: '16px 0', fontSize: '14px', lineHeight: '1.6' }}>
+              <p style={{ margin: '0 0 16px 0' }}>
+                {t('keyloggerWizardDesc')}
+              </p>
+
+              <div style={{ backgroundColor: 'rgba(0, 0, 0, 0.2)', borderRadius: '12px', padding: '16px', border: '1px solid var(--border-color)', display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                <div>
+                  <h4 style={{ margin: '0 0 4px 0', fontSize: '13px', fontWeight: 'bold', color: 'white' }}>macOS</h4>
+                  <p style={{ fontSize: '12px', margin: 0 }}>
+                    {t('keyloggerStepMac')}
+                  </p>
+                </div>
+                <div style={{ borderTop: '1px solid var(--border-color)', paddingTop: '10px' }}>
+                  <h4 style={{ margin: '0 0 4px 0', fontSize: '13px', fontWeight: 'bold', color: 'white' }}>Windows</h4>
+                  <p style={{ fontSize: '12px', margin: '0 0 6px 0' }}>
+                    {t('keyloggerStepWin')}
+                  </p>
+                  <pre style={{ backgroundColor: 'var(--bg-panel)', padding: '8px', borderRadius: '6px', border: '1px solid var(--border-color)', color: 'var(--accent-gold)', fontFamily: 'monospace', fontSize: '11px', overflowX: 'auto' }}>
+                    Set-ItemProperty -Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System' -Name 'PromptOnSecureDesktop' -Value 1
+                  </pre>
+                </div>
+                <div style={{ borderTop: '1px solid var(--border-color)', paddingTop: '10px' }}>
+                  <h4 style={{ margin: '0 0 4px 0', fontSize: '13px', fontWeight: 'bold', color: 'white' }}>Linux</h4>
+                  <p style={{ fontSize: '12px', margin: 0 }}>
+                    {t('keyloggerStepLin')}
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            <div className="modal-actions" style={{ borderTop: '1px solid var(--border-color)', paddingTop: '16px', display: 'flex', justifyContent: 'flex-end' }}>
+              <button className="btn btn-primary" onClick={() => setShowKeyloggerWizard(false)}>
                 {t('btnConfirm')}
               </button>
             </div>

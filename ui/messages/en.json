@@ -266,5 +266,15 @@
   "btnCheckUpdates": "Check for Updates",
   "verifyingConnection": "Verifying...",
   "verifySuccess": "Successfully connected to UID Security Cloud.",
-  "verifyFailed": "Connection to UID Security Cloud failed. Please check your network."
+  "verifyFailed": "Connection to UID Security Cloud failed. Please check your network.",
+  "antiKeyloggerHeader": "Anti-Keylogger Protection",
+  "antiKeyloggerDesc": "Protects keyboard input from active sniffers or snooping processes.",
+  "antiKeyloggerActive": "Active & Secured",
+  "antiKeyloggerDisabled": "Not Active",
+  "btnRemediateKeylogger": "Remediate Protection",
+  "keyloggerWizardTitle": "Keylogger Remediation Guide",
+  "keyloggerWizardDesc": "Keyboard input scrambling and isolation protect your credentials. Here is how to configure or enable them on your operating system.",
+  "keyloggerStepMac": "On macOS, the UID Agent dynamically invokes secure keyboard input mode (SecureEventInput) for its sandbox window sessions. Close and relaunch UID Agent to verify.",
+  "keyloggerStepWin": "On Windows, run PowerShell as Administrator and enable User Account Control (UAC) Secure Desktop to block keystroke hooks:",
+  "keyloggerStepLin": "On Linux, run a desktop environment with Wayland (e.g., Ubuntu Wayland session) instead of X11. Wayland natively isolates keyboard events between apps, preventing keystroke theft."
 }

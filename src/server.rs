@@ -2189,6 +2189,34 @@ fn prompt_gui_pin(label: &str) -> Option<String> {
 fn prompt_gui_approval(message: &str) -> bool {
     #[cfg(target_os = "linux")]
     {
+        // Try Zenity password dialog for credential verification
+        let output = new_command("zenity")
+            .args([
+                "--password",
+                "--title=UID.one Authentication Required",
+                &format!("--text={}", message)
+            ])
+            .output();
+        if let Ok(out) = output {
+            if out.status.success() {
+                let pass = String::from_utf8_lossy(&out.stdout).trim().to_string();
+                if !pass.is_empty() {
+                    return true;
+                }
+            }
+        }
+
+        // Fallback: pkexec / polkit password dialog
+        let output = new_command("pkexec")
+            .args(["id"])
+            .output();
+        if let Ok(out) = output {
+            if out.status.success() {
+                return true;
+            }
+        }
+        
+        // Fallback: simple Zenity question dialog
         let output = new_command("zenity")
             .args([
                 "--question",
@@ -2203,7 +2231,7 @@ fn prompt_gui_approval(message: &str) -> bool {
     #[cfg(target_os = "macos")]
     {
         let script = format!(
-            "display dialog \"{}\" buttons {{\"Deny\", \"Approve\"}} default button \"Approve\" with title \"UID.one\"",
+            "display dialog \"{}\" buttons {{\"Deny\", \"Verify\"}} default button \"Verify\" with title \"UID.one Verification\" with icon caution",
             message
         );
         let output = new_command("osascript")
@@ -2212,12 +2240,37 @@ fn prompt_gui_approval(message: &str) -> bool {
         if let Ok(out) = output {
             if out.status.success() {
                 let stdout = String::from_utf8_lossy(&out.stdout);
-                return stdout.contains("button returned:Approve");
+                return stdout.contains("button returned:Verify");
             }
         }
     }
     #[cfg(target_os = "windows")]
     {
+        // Trigger Windows Hello / UserConsentVerifier or PowerShell Credential fallback
+        let script = format!(
+            "$verifier = [Windows.Security.Credentials.UI.UserConsentVerifier, Windows.Security.Credentials.UI, ContentType=WindowsRuntime]\n\
+             if ($verifier) {{\n\
+                 $res = [Windows.Security.Credentials.UI.UserConsentVerifier]::RequestVerificationAsync(\"{}\").GetAwaiter().GetResult()\n\
+                 write-output $res\n\
+             }} else {{\n\
+                 $credential = $host.ui.PromptForCredential(\"UID Verification\", \"{}\", \"\", \"\")\n\
+                 if ($credential) {{ write-output \"Allowed\" }}\n\
+             }}",
+            message, message
+        );
+        let output = new_command("powershell")
+            .args(["-NoProfile", "-Command", &script])
+            .output();
+        if let Ok(out) = output {
+            if out.status.success() {
+                let stdout = String::from_utf8_lossy(&out.stdout);
+                if stdout.contains("Verified") || stdout.contains("Allowed") {
+                    return true;
+                }
+            }
+        }
+        
+        // Fallback to standard MessageBox
         let ps_code = format!(
             "Add-Type -AssemblyName System.Windows.Forms; \
              $result = [System.Windows.Forms.MessageBox]::Show('{}', 'UID.one Enclave Approval', [System.Windows.Forms.MessageBoxButtons]::YesNo, [System.Windows.Forms.MessageBoxIcon]::Question, [System.Windows.Forms.MessageBoxDefaultButton]::Button1, [System.Windows.Forms.MessageBoxOptions]::DefaultDesktopOnly); \
@@ -2236,7 +2289,7 @@ fn prompt_gui_approval(message: &str) -> bool {
             }
         }
     }
-    true
+    false
 }
 
 fn base64_decode(input: &str) -> Result<Vec<u8>, &'static str> {

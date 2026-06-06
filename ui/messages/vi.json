@@ -266,5 +266,15 @@
   "btnCheckUpdates": "Kiểm tra Cập nhật",
   "verifyingConnection": "Đang xác minh...",
   "verifySuccess": "Kết nối thành công tới Đám mây Bảo mật UID.",
-  "verifyFailed": "Kết nối tới Đám mây Bảo mật UID thất bại. Vui lòng kiểm tra lại mạng."
+  "verifyFailed": "Kết nối tới Đám mây Bảo mật UID thất bại. Vui lòng kiểm tra lại mạng.",
+  "antiKeyloggerHeader": "Chống Ghi Cú Gõ (Keylogger)",
+  "antiKeyloggerDesc": "Bảo vệ thông tin nhập từ bàn phím khỏi các phần mềm gián điệp hoặc tiến trình nghe lén.",
+  "antiKeyloggerActive": "Hoạt động & Được bảo vệ",
+  "antiKeyloggerDisabled": "Không hoạt động",
+  "btnRemediateKeylogger": "Khắc phục bảo mật",
+  "keyloggerWizardTitle": "Hướng dẫn Khắc phục Chống Keylogger",
+  "keyloggerWizardDesc": "Tính năng xáo trộn và cô lập nhập liệu từ bàn phím giúp bảo vệ thông tin đăng nhập của bạn. Dưới đây là cách cấu hình hoặc bật chúng trên hệ điều hành của bạn.",
+  "keyloggerStepMac": "Trên macOS, UID Agent tự động kích hoạt chế độ bảo mật nhập liệu bàn phím (SecureEventInput) cho các phiên cửa sổ sandbox. Đóng và khởi động lại UID Agent để áp dụng.",
+  "keyloggerStepWin": "Trên Windows, chạy PowerShell với quyền Administrator và bật Chế độ màn hình bảo mật (Secure Desktop) của UAC để chặn các hook cú gõ:",
+  "keyloggerStepLin": "Trên Linux, hãy sử dụng môi trường máy bàn chạy Wayland (ví dụ: phiên Ubuntu Wayland) thay vì X11. Wayland tự động cô lập các sự kiện bàn phím giữa các ứng dụng, ngăn chặn việc đánh cắp cú gõ."
 }

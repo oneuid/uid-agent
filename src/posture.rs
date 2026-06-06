@@ -15,6 +15,7 @@ pub struct DevicePosture {
     pub screen_lock_active: bool,
     pub ssh_keys_secure: bool,
     pub vpn_active: bool,
+    pub anti_keylogger_active: bool,
 }
 
 fn new_command<S: AsRef<std::ffi::OsStr>>(program: S) -> Command {
@@ -58,6 +59,7 @@ pub fn get_posture() -> DevicePosture {
         screen_lock_active: false,
         ssh_keys_secure: true,
         vpn_active: false,
+        anti_keylogger_active: false,
     };
 }
 
@@ -80,6 +82,8 @@ mod linux {
         let ssh_keys_secure = check_ssh_keys_secure();
         let vpn_active = check_vpn_status();
 
+        let anti_keylogger_active = check_anti_keylogger();
+
         DevicePosture {
             os_name,
             os_version,
@@ -92,7 +96,21 @@ mod linux {
             screen_lock_active,
             ssh_keys_secure,
             vpn_active,
+            anti_keylogger_active,
         }
+    }
+
+    fn check_anti_keylogger() -> bool {
+        // Wayland session type inherently provides window isolation and blocks global keyloggers.
+        if std::env::var("WAYLAND_DISPLAY").is_ok() {
+            return true;
+        }
+        if let Ok(out) = new_command("printenv").arg("XDG_SESSION_TYPE").output() {
+            if String::from_utf8_lossy(&out.stdout).trim() == "wayland" {
+                return true;
+            }
+        }
+        false
     }
 
     fn get_os_info() -> (String, String) {
@@ -287,6 +305,8 @@ mod macos {
         let hostname = get_hostname();
         let secure_boot = check_secure_boot();
 
+        let anti_keylogger_active = check_anti_keylogger();
+
         DevicePosture {
             os_name,
             os_version,
@@ -299,7 +319,19 @@ mod macos {
             screen_lock_active: true,
             ssh_keys_secure: true,
             vpn_active: false,
+            anti_keylogger_active,
         }
+    }
+
+    fn check_anti_keylogger() -> bool {
+        // macOS SecureEventInput mode hides keystrokes from other processes.
+        if let Ok(out) = new_command("ioreg").args(["-l", "-w", "0"]).output() {
+            let stdout = String::from_utf8_lossy(&out.stdout);
+            if stdout.contains("kCGSSessionSecureInputPID") {
+                return true;
+            }
+        }
+        false
     }
 
     fn get_os_version() -> String {
@@ -380,6 +412,8 @@ mod windows {
         let hostname = get_hostname();
         let secure_boot = check_secure_boot();
 
+        let anti_keylogger_active = check_anti_keylogger();
+
         DevicePosture {
             os_name,
             os_version,
@@ -392,7 +426,28 @@ mod windows {
             screen_lock_active: true,
             ssh_keys_secure: true,
             vpn_active: false,
+            anti_keylogger_active,
         }
+    }
+
+    fn check_anti_keylogger() -> bool {
+        use winreg::RegKey;
+        use winreg::enums::HKEY_LOCAL_MACHINE;
+        // PromptOnSecureDesktop forces credentials UAC popup on Secure Desktop.
+        let secure_desktop = RegKey::predef(HKEY_LOCAL_MACHINE)
+            .open_subkey("SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Policies\\System")
+            .and_then(|key| key.get_value::<u32, _>("PromptOnSecureDesktop"))
+            .map(|val| val == 1)
+            .unwrap_or(false);
+            
+        // RunAsPPL activates LSA protection to prevent key/credential harvesting hooks.
+        let lsa_protect = RegKey::predef(HKEY_LOCAL_MACHINE)
+            .open_subkey("SYSTEM\\CurrentControlSet\\Control\\Lsa")
+            .and_then(|key| key.get_value::<u32, _>("RunAsPPL"))
+            .map(|val| val >= 1)
+            .unwrap_or(false);
+
+        secure_desktop || lsa_protect
     }
 
     fn get_os_version() -> String {
