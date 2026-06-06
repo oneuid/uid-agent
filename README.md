@@ -8,6 +8,23 @@ For detailed architectural specifications, see the [UID Platform Specifications]
 
 ---
 
+## 🤝 The Perfect Duo: UID Agent & UID Link
+
+To achieve the highest level of security and client-side trust, **UID Agent** (Desktop App & Daemon) and [**UID Link**](https://github.com/oneuid/uid-extension) (Browser Extension) are engineered to work in tandem.
+
+| Component | Layer | Core Security Responsibilities |
+| :--- | :--- | :--- |
+| **[UID Link](https://github.com/oneuid/uid-extension) (Browser Extension)** | Web & Session | Real-time session lock, anti-phishing shield, browser-layer DLP, anti-tracking cookie guards, webmail/PDF cryptographic signing triggers. |
+| **UID Agent (Desktop App)** | Hardware & OS | Continuous endpoint integrity monitoring (SOC 2), PKCS#11 hardware keys (USB tokens), containerized app sandboxes (Docker + Wine). |
+
+### 🚀 Unified Workflow Synergy
+1. **Hardware-Backed Cryptographic Signing:** When signing a document or text in the browser using UID Link, it communicates with the local **UID Agent** daemon over secure native ports to access your plugged-in USB security tokens (PKCS#11/smartcards), executing the signing process directly on-device without exposing private keys.
+2. **Device Attestation & Session Integrity:** UID Link actively checks that a trusted **UID Agent** is running on the host machine. The agent synchronizes authorization states and verifies that the device meets enterprise security compliance (disk encryption, firewall status) before enabling access.
+
+👉 **Get UID Link:** Check out the [UID Link Repository](https://github.com/oneuid/uid-extension) (or `../uid-link/README.md` if cloned locally side-by-side) to install the extension on Google Chrome, Microsoft Edge, Mozilla Firefox, or Apple Safari.
+
+---
+
 ## UID Desktop App (GUI & Linux App Sandbox)
 
 UID Agent now features a beautiful **Tauri-powered Desktop GUI Dashboard** and a **Secure App Sandbox** that lets you run Windows enterprise applications (like Zalo Messenger) safely inside containerized Wine Docker sandboxes on Linux.
@@ -49,7 +66,7 @@ sudo dpkg -i src-tauri/target/release/bundle/deb/uid-agent-desktop_3.0.0_amd64.d
 Once installed via `.deb`:
 1. Press the **Super (Windows) key** to open the GNOME Applications menu.
 2. Search for **"UID Agent"**.
-3. Right-click the UID Agent icon and select **"Add to Favorites"** (Thêm vào danh sách ưa thích).
+3. Right-click the UID Agent icon and select **"Add to Favorites"**.
 4. The app is now pinned to your toolbar/Dock for quick launch.
 
 ---
