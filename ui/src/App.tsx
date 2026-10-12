@@ -1616,8 +1616,8 @@ export default function App() {
                           <div className="card-top-row">
                             <div className="chip-icon">
                               <svg width="38" height="30" viewBox="0 0 38 30" fill="none" xmlns="http://www.w3.org/2000/svg">
-                                <rect x="1" y="1" width="36" height="28" rx="4" stroke="#D4AF37" strokeWidth="1.5" fill="rgba(212,175,55,0.05)"/>
-                                <path d="M12 1V29M26 1V29M1 10H37M1 20H37M12 10C12 13 15 15 19 15C23 15 26 13 26 10M12 20C12 17 15 15 19 15" stroke="#D4AF37" strokeWidth="1.5"/>
+                                <rect x="1" y="1" width="36" height="28" rx="4" stroke="#3B82F6" strokeWidth="1.5" fill="rgba(37,99,235,0.1)"/>
+                                <path d="M12 1V29M26 1V29M1 10H37M1 20H37M12 10C12 13 15 15 19 15C23 15 26 13 26 10M12 20C12 17 15 15 19 15" stroke="#3B82F6" strokeWidth="1.5"/>
                               </svg>
                             </div>
                             <div className="hardware-type">

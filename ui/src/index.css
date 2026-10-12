@@ -1,18 +1,18 @@
 :root {
-  --bg-main: #05060A;
-  --bg-sidebar: rgba(10, 12, 18, 0.75);
-  --bg-panel: rgba(18, 22, 33, 0.45);
-  --border-color: rgba(255, 255, 255, 0.06);
-  --color-primary: #D4AF37; /* Metallic Gold */
-  --color-primary-hover: #F3E5AB;
-  --text-main: #F3F4F6;
-  --text-muted: #9CA3AF;
+  --bg-main: #020617;
+  --bg-sidebar: rgba(11, 17, 32, 0.85);
+  --bg-panel: rgba(15, 23, 42, 0.55);
+  --border-color: rgba(51, 65, 85, 0.6);
+  --color-primary: #2563EB; /* Electric Cobalt */
+  --color-primary-hover: #3B82F6;
+  --text-main: #F8FAFC;
+  --text-muted: #94A3B8;
   
   --success-color: #10B981;
   --danger-color: #EF4444;
   --warning-color: #F59E0B;
   
-  font-family: 'Outfit', 'Inter', system-ui, -apple-system, sans-serif;
+  font-family: 'Inter', system-ui, -apple-system, sans-serif;
   color-scheme: dark;
   background-color: var(--bg-main);
   color: var(--text-main);
@@ -625,9 +625,9 @@ body, html, #root {
 }
 
 .hsm-badge {
-  background: rgba(212, 175, 55, 0.15);
-  border: 1px solid rgba(212, 175, 55, 0.3);
-  color: #d4af37;
+  background: rgba(37, 99, 235, 0.15);
+  border: 1px solid rgba(37, 99, 235, 0.3);
+  color: #60a5fa;
   font-size: 10px;
   font-weight: 700;
   padding: 3px 8px;
@@ -989,7 +989,7 @@ body, html, #root {
   cursor: pointer;
   border: 1px solid transparent;
   transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
-  font-family: 'Outfit', 'Inter', sans-serif;
+  font-family: 'Inter', sans-serif;
   letter-spacing: 0.01em;
 }
 
@@ -999,15 +999,15 @@ body, html, #root {
 }
 
 .btn-primary {
-  background: linear-gradient(135deg, var(--color-primary), #B38F24);
-  color: #0c0f17;
-  box-shadow: 0 2px 10px rgba(212, 175, 55, 0.15);
+  background: linear-gradient(135deg, var(--color-primary), #1D4ED8);
+  color: #ffffff;
+  box-shadow: 0 2px 10px rgba(37, 99, 235, 0.25);
   border: 1px solid rgba(255, 255, 255, 0.08);
 }
 
 .btn-primary:hover:not(:disabled) {
   background: linear-gradient(135deg, var(--color-primary-hover), var(--color-primary));
-  box-shadow: 0 4px 15px rgba(212, 175, 55, 0.25);
+  box-shadow: 0 4px 15px rgba(37, 99, 235, 0.35);
   transform: translateY(-1px);
 }
 
@@ -1257,7 +1257,7 @@ body, html, #root {
 .modal-header h3 {
   font-size: 22px;
   font-weight: 700;
-  background: linear-gradient(135deg, #FFFFFF 0%, #D4AF37 100%);
+  background: linear-gradient(135deg, #FFFFFF 0%, #60A5FA 100%);
   -webkit-background-clip: text;
   -webkit-text-fill-color: transparent;
 }
@@ -1351,9 +1351,9 @@ body, html, #root {
 
 /* Fallback icons general background */
 .app-icon:not(.zalo-bg):not(.vnpthsm-bg) {
-  background: linear-gradient(135deg, #4A4A4A, #2B2B2B);
+  background: linear-gradient(135deg, #1E293B, #0F172A);
   border: 1px solid rgba(255, 255, 255, 0.1);
-  color: #D4AF37;
+  color: #60A5FA;
   text-shadow: 0 2px 4px rgba(0, 0, 0, 0.5);
 }
 
