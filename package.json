@@ -1,0 +1,17 @@
+{
+  "name": "uid-agent-root",
+  "version": "3.0.16",
+  "private": true,
+  "description": "UID Agent - Endpoint Security & Hardware PKCS#11 Smartcard Bridge",
+  "scripts": {
+    "dev": "pnpm --prefix ui dev",
+    "build": "pnpm --prefix ui build",
+    "lint": "pnpm --prefix ui lint",
+    "tauri": "tauri",
+    "desktop:dev": "npx -y @tauri-apps/cli dev",
+    "desktop:build": "npx -y @tauri-apps/cli build"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.2.0"
+  }
+}

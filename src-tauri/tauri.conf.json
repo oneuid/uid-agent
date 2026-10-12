@@ -5,7 +5,7 @@
   "identifier": "one.uid.agent",
   "build": {
     "frontendDist": "../ui/dist",
-    "devUrl": "http://127.0.0.1:5173",
+    "devUrl": "http://127.0.0.1:3000",
     "beforeDevCommand": "cd ../ui && pnpm dev",
     "beforeBuildCommand": "cd ../ui && pnpm build"
   },
@@ -13,8 +13,10 @@
     "windows": [
       {
         "title": "UID Agent",
-        "width": 880,
-        "height": 620,
+        "width": 1040,
+        "height": 720,
+        "minWidth": 900,
+        "minHeight": 600,
         "resizable": true,
         "fullscreen": false,
         "url": "index.html"
