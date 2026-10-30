@@ -6,12 +6,13 @@ const nextConfig: NextConfig = {
   distDir: 'dist',
   poweredByHeader: false,
   productionBrowserSourceMaps: false,
-  compiler: {
-    removeConsole:
-      process.env.NODE_ENV === 'production'
-        ? { exclude: ['error', 'warn'] }
-        : false,
-  },
+  ...(process.env.NODE_ENV === 'production'
+    ? {
+        compiler: {
+          removeConsole: { exclude: ['error', 'warn'] },
+        },
+      }
+    : {}),
   images: { unoptimized: true },
   turbopack: {
     root: path.resolve(__dirname),
