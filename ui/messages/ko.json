@@ -8,11 +8,10 @@
   "settingsTab": "설정",
   "versionInfo": "버전 3.0.0 (Linux)",
   "pinAgentBtn": "에이전트를 독에 고정",
-  "userConnectAccount": "Connect Account",
-  "userNotSynced": "Offline Mode",
+  "userConnectAccount": "Connect account",
+  "userNotSynced": "Offline mode",
   "userSyncDesc": "Log in on web to sync",
-  "userLogout": "Log Out",
-  
+  "userLogout": "Log out",
   "postureTitle": "시스템 상태 및 SOC 2 준수",
   "postureSubtitle": "장치 보안 제어의 실시간 유효성 검사.",
   "osHeader": "운영 체제",
@@ -29,7 +28,6 @@
   "diskDesc": "로컬의 저장 데이터를 보호합니다",
   "firewallDesc": "승인되지 않은 네트워크 연결을 차단합니다",
   "bootDesc": "시작 시 악성 루트킷을 방지합니다",
-  
   "tokensTitle": "연결된 스마트 카드 및 USB 토큰",
   "tokensSubtitle": "이 시스템에 연결된 인증된 PKCS#11 하드웨어 토큰.",
   "noTokens": "USB 보안 토큰이 감지되지 않았습니다.",
@@ -38,7 +36,6 @@
   "tokenIssuer": "발급자",
   "tokenValidFrom": "유효 기간 시작",
   "tokenValidTo": "유효 기간 만료",
-  
   "appsTitle": "엔터프라이즈 Linux 샌드박스",
   "appsSubtitle": "보안이 강화된 컨테이너형 샌드박스 내부에서 Windows 비즈니스 애플리케이션을 실행합니다.",
   "addAppBtn": "사용자 정의 앱 추가",
@@ -58,7 +55,6 @@
   "btnReconfigure": "재구성 (.exe)",
   "btnStopSandbox": "샌드박스 중지",
   "opConsoleLogs": "작업 콘솔 로그",
-  
   "settingsTitle": "에이전트 설정 및 언어 기본 설정",
   "settingsSubtitle": "보안 정책, 에이전트 UI 언어 및 진단 구성.",
   "langSection": "언어 및 지역",
@@ -79,7 +75,6 @@
   "btnCheckUpdate": "업데이트 확인",
   "btnUpdating": "확인 중...",
   "updateSuccess": "UID.one 에이전트가 최신 버전 (v3.0.0) 입니다.",
-  
   "addAppModalTitle": "사용자 정의 앱 추가 및 설치",
   "appNameLabel": "애플리케이션 이름 *",
   "appNamePlaceholder": "예: MISA Accounting",
@@ -88,7 +83,6 @@
   "btnBrowse": "찾아보기",
   "btnCancel": "취소",
   "btnSaveInstall": "저장 및 설치",
-  
   "selectExeModalTitle": "실행 파일 선택",
   "selectExeModalDesc": "이 샌드박스 환경 내에서 여러 실행 파일이 발견되었습니다. 실행할 기본 애플리케이션 파일을 선택하십시오:",
   "selectExeSub": "샌드박스 내 실행 파일 경로"

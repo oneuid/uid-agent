@@ -2,9 +2,9 @@
   "agentTitle": "UID.one",
   "agentSubtitle": "عميل أمان نظام التشغيل للمحطة",
   "active": "نشط",
-  "postureTab": "Posture Check",
-  "tokensTab": "USB Certificates",
-  "appsTab": "App Sandbox",
+  "postureTab": "Posture check",
+  "tokensTab": "USB certificates",
+  "appsTab": "App sandbox",
   "settingsTab": "Settings",
   "versionInfo": "الإصدار 3.0.0 (Linux)",
   "pinAgentBtn": "تثبيت العميل على شريط التطبيقات",
@@ -12,7 +12,6 @@
   "userNotSynced": "وضع عدم الاتصال",
   "userSyncDesc": "سجل الدخول على الويب للمزامنة",
   "userLogout": "تسجيل الخروج",
-  
   "postureTitle": "حالة النظام والامتثال لمعيار SOC 2",
   "postureSubtitle": "التحقق في الوقت الفعلي من عناصر التحكم في أمان الجهاز.",
   "osHeader": "نظام التشغيل",
@@ -29,7 +28,6 @@
   "diskDesc": "يحمي البيانات المحلية المخزنة",
   "firewallDesc": "يمنع اتصالات الشبكة غير المصرح بها",
   "bootDesc": "يمنع برمجيات الخبيثة عند بدء التشغيل",
-  
   "tokensTitle": "البطاقات الذكية ورموز USB المتصلة",
   "tokensSubtitle": "رموز أجهزة PKCS#11 الموثقة والمتصلة بهذا الجهاز.",
   "noTokens": "لم يتم اكتشاف أي رموز أمان USB.",
@@ -38,7 +36,6 @@
   "tokenIssuer": "الجهة المصدرة",
   "tokenValidFrom": "صالح من",
   "tokenValidTo": "صالح إلى",
-  
   "appsTitle": "بيئة تشغيل تطبيقات Linux للمؤسسات",
   "appsSubtitle": "تشغيل تطبيقات أعمال Windows داخل بيئة تشغيل معزولة وآمنة.",
   "addAppBtn": "إضافة تطبيق مخصص",
@@ -58,7 +55,6 @@
   "btnReconfigure": "إعادة التهيئة (.exe)",
   "btnStopSandbox": "إيقاف بيئة التشغيل المعزولة",
   "opConsoleLogs": "سجلات وحدة التحكم بالعمليات",
-  
   "settingsTitle": "إعدادات العميل وتفضيلات اللغة",
   "settingsSubtitle": "تهيئة السياسات الأمنية، لغة واجهة مستخدم العميل، وإجراء التشخيصات.",
   "langSection": "اللغة والمنطقة",
@@ -79,7 +75,6 @@
   "btnCheckUpdate": "التحقق من وجود تحديثات",
   "btnUpdating": "جاري التحقق...",
   "updateSuccess": "عميل UID.one الخاص بك محدث بالكامل (v3.0.0).",
-  
   "addAppModalTitle": "إضافة وتثبيت تطبيق مخصص",
   "appNameLabel": "اسم التطبيق *",
   "appNamePlaceholder": "مثال: MISA Accounting",
@@ -88,7 +83,6 @@
   "btnBrowse": "تصفح",
   "btnCancel": "إلغاء",
   "btnSaveInstall": "حفظ وتثبيت التطبيق",
-  
   "selectExeModalTitle": "حدد ملف التشغيل",
   "selectExeModalDesc": "تم اكتشاف ملفات تنفيذية متعددة داخل بيئة التشغيل المعزولة هذه. يرجى تحديد ملف التطبيق الرئيسي الذي ترغب في تشغيله:",
   "selectExeSub": "مسار الملف التنفيذي داخل بيئة التشغيل المعزولة"

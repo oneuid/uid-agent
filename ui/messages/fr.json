@@ -1,10 +1,10 @@
 {
   "agentTitle": "UID.one",
-  "agentSubtitle": "Agent de sécurité Endpoint OS",
+  "agentSubtitle": "Agent de sécurité endpoint OS",
   "active": "Actif",
-  "postureTab": "Posture Check",
-  "tokensTab": "USB Certificates",
-  "appsTab": "App Sandbox",
+  "postureTab": "Posture check",
+  "tokensTab": "USB certificates",
+  "appsTab": "App sandbox",
   "settingsTab": "Settings",
   "versionInfo": "Version 3.0.0 (Linux)",
   "pinAgentBtn": "Épingler l'agent au Dock",
@@ -12,13 +12,12 @@
   "userNotSynced": "Mode hors ligne",
   "userSyncDesc": "Connectez-vous sur le web pour synchroniser",
   "userLogout": "Se déconnecter",
-  
   "postureTitle": "Posture système et conformité SOC 2",
   "postureSubtitle": "Validation en temps réel des contrôles de sécurité de l'appareil.",
   "osHeader": "Système d'exploitation",
   "diskHeader": "Chiffrement du disque",
   "firewallHeader": "Pare-feu système",
-  "bootHeader": "Secure Boot",
+  "bootHeader": "Secure boot",
   "encrypted": "Chiffré",
   "notDetected": "Non détecté",
   "firewallActive": "Actif",
@@ -29,7 +28,6 @@
   "diskDesc": "Protège les données locales au repos",
   "firewallDesc": "Bloque les connexions réseau non autorisées",
   "bootDesc": "Empêche les rootkits malveillants au démarrage",
-  
   "tokensTitle": "Cartes à puce et tokens USB connectés",
   "tokensSubtitle": "Tokens matériels PKCS#11 attestés branchés sur cette machine.",
   "noTokens": "Aucun token de sécurité USB détecté.",
@@ -38,8 +36,7 @@
   "tokenIssuer": "Émetteur",
   "tokenValidFrom": "Valide du",
   "tokenValidTo": "Valide au",
-  
-  "appsTitle": "Sandbox Linux Entreprise",
+  "appsTitle": "Sandbox Linux entreprise",
   "appsSubtitle": "Exécutez des applications professionnelles Windows dans un sandbox conteneurisé sécurisé.",
   "addAppBtn": "Ajouter une application personnalisée",
   "dockerNotRunning": "Le démon Docker n'est pas lancé. Veuillez installer et démarrer Docker pour exécuter des applications sandbox.",
@@ -54,11 +51,10 @@
   "btnBrowseInstaller": "Parcourir l'installateur (.exe)",
   "btnRemoveConfig": "Supprimer la config",
   "btnLaunchApp": "Lancer l'app",
-  "btnPinToDock": "Épingler au Dock",
+  "btnPinToDock": "Épingler au dock",
   "btnReconfigure": "Reconfigurer (.exe)",
   "btnStopSandbox": "Arrêter le sandbox",
   "opConsoleLogs": "Journaux de la console d'opération",
-  
   "settingsTitle": "Paramètres de l'agent et préférence de langue",
   "settingsSubtitle": "Configurez les politiques de sécurité, la langue de l'interface de l'agent et effectuez des diagnostics.",
   "langSection": "Langue et région",
@@ -79,7 +75,6 @@
   "btnCheckUpdate": "Vérifier les mises à jour",
   "btnUpdating": "Vérification...",
   "updateSuccess": "Votre agent UID.one est à jour (v3.0.0).",
-  
   "addAppModalTitle": "Ajouter et installer une application personnalisée",
   "appNameLabel": "Nom de l'application *",
   "appNamePlaceholder": "ex: Comptabilité MISA",
@@ -88,7 +83,6 @@
   "btnBrowse": "Parcourir",
   "btnCancel": "Annuler",
   "btnSaveInstall": "Enregistrer et installer l'application",
-  
   "selectExeModalTitle": "Sélectionner le fichier de lancement",
   "selectExeModalDesc": "Plusieurs exécutables ont été découverts dans cet environnement sandbox. Veuillez sélectionner le fichier d'application principal que vous souhaitez exécuter :",
   "selectExeSub": "Chemin de l'exécutable dans le sandbox"
