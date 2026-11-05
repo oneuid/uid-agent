@@ -183,19 +183,19 @@ export default function AgentDashboard() {
                 key={tab.id}
                 type="button"
                 onClick={() => setActiveTab(tab.id)}
-                className={`w-full flex items-center justify-between px-3.5 py-3 rounded-xl text-xs font-semibold transition-all text-left cursor-pointer ${
+                className={`w-full flex items-center justify-between px-3.5 py-3 rounded-xl text-xs font-semibold transition-all text-left cursor-pointer border ${
                   isActive
-                    ? 'bg-blue-600 text-white font-bold shadow-[0_2px_12px_rgba(37,99,235,0.35)]'
-                    : 'text-slate-300 hover:text-white hover:bg-slate-900/80 border border-transparent hover:border-slate-800'
+                    ? 'bg-blue-600/15 text-blue-400 border-blue-500/30 font-bold shadow-2xs'
+                    : 'text-slate-300 hover:text-white hover:bg-slate-900/80 border-transparent hover:border-slate-800'
                 }`}
               >
                 <div className="flex items-center gap-2.5">
-                  <IconComp className={`w-4 h-4 shrink-0 ${isActive ? 'text-white' : 'text-slate-400'}`} />
+                  <IconComp className={`w-4 h-4 shrink-0 ${isActive ? 'text-blue-400' : 'text-slate-400'}`} />
                   <span>{tab.label}</span>
                 </div>
                 {tab.badge && (
-                  <span className={`text-[10px] px-2 py-0.5 rounded-full font-mono font-bold ${
-                    isActive ? 'bg-white/20 text-white' : 'bg-emerald-500/20 text-emerald-400'
+                  <span className={`text-[10px] px-2 py-0.5 rounded-full font-mono font-bold tabular-nums ${
+                    isActive ? 'bg-blue-500/20 text-blue-300' : 'bg-emerald-500/20 text-emerald-400'
                   }`}>
                     {tab.badge}
                   </span>
@@ -205,21 +205,21 @@ export default function AgentDashboard() {
           })}
 
           {/* Quick Hardware Summary in Sidebar */}
-          <div className="mt-8 p-3.5 rounded-xl bg-slate-900/60 border border-slate-800/80 space-y-2 text-xs font-mono">
+          <div className="mt-8 p-3.5 rounded-xl bg-slate-900/80 border border-slate-800 space-y-2 text-xs font-mono">
             <span className="text-[10px] uppercase font-bold text-slate-400 tracking-wider block">
               Node Telemetry
             </span>
             <div className="flex justify-between text-[11px]">
               <span className="text-slate-400">Daemon</span>
-              <span className="text-emerald-400 font-bold">127.0.0.1:13013</span>
+              <span className="text-emerald-400 font-bold tabular-nums">127.0.0.1:13013</span>
             </div>
             <div className="flex justify-between text-[11px]">
               <span className="text-slate-400">TPM 2.0</span>
-              <span className="text-blue-400 font-bold">{tpm?.present ? 'Active' : 'Detected'}</span>
+              <span className="text-blue-400 font-bold tabular-nums">{tpm?.present ? 'Active' : 'Detected'}</span>
             </div>
             <div className="flex justify-between text-[11px]">
               <span className="text-slate-400">Tokens</span>
-              <span className={certs.length > 0 ? 'text-emerald-400 font-bold' : 'text-slate-400'}>
+              <span className={`tabular-nums ${certs.length > 0 ? 'text-emerald-400 font-bold' : 'text-slate-400'}`}>
                 {certs.length} Plugged
               </span>
             </div>

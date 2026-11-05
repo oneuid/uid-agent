@@ -1,5 +1,38 @@
 @import "tailwindcss";
 
+@theme inline {
+  /* Canonical 5-Stop Chromatic Scale for uid.one Identity System */
+  --color-slate-50: #F8FAFC;
+  --color-slate-100: #F1F5F9;
+  --color-slate-200: #E2E8F0;
+  --color-slate-300: #CBD5E1;
+  --color-slate-400: #94A3B8;
+  --color-slate-500: #64748B;
+  --color-slate-600: #475569;
+  --color-slate-700: #334155;
+  --color-slate-800: #1E293B;
+  --color-slate-900: #111A2E;
+  --color-slate-950: #0B1220;
+
+  /* Harmonized 5-Stop Amber Scale */
+  --color-amber-50: #fdf9ee;
+  --color-amber-100: #faefd1;
+  --color-amber-200: #f5dca1;
+  --color-amber-300: #f0c465;
+  --color-amber-400: #f5b841;
+  --color-amber-500: #F59E0B;
+  --color-amber-600: #d97706;
+  --color-amber-700: #b45309;
+  --color-amber-800: #8c3b0c;
+  --color-amber-900: #6e2e0b;
+  --color-amber-950: #3d1705;
+
+  --color-blue-600: #2563EB;
+  --color-blue-500: #3B82F6;
+  --color-blue-50: #EFF6FF;
+  --color-emerald-500: #10B981;
+}
+
 @layer base {
   :root {
     --font-inter: 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
@@ -15,6 +48,10 @@
   }
 }
 
+.tabular-nums {
+  font-variant-numeric: tabular-nums;
+}
+
 /* Custom scrollbars for desktop kiosk */
 ::-webkit-scrollbar {
   width: 6px;
@@ -22,7 +59,7 @@
 }
 
 ::-webkit-scrollbar-track {
-  background: rgba(15, 23, 42, 0.6);
+  background: rgba(17, 26, 46, 0.6);
 }
 
 ::-webkit-scrollbar-thumb {
