@@ -1,48 +1,70 @@
 'use client';
 
-import React, { useState, createContext, useContext } from 'react';
+import React, { useState, useEffect, createContext, useContext } from 'react';
+import ar from '../messages/ar.json';
+import de from '../messages/de.json';
 import en from '../messages/en.json';
-import vi from '../messages/vi.json';
-import zh from '../messages/zh.json';
+import es from '../messages/es.json';
+import fr from '../messages/fr.json';
+import it from '../messages/it.json';
 import ja from '../messages/ja.json';
 import ko from '../messages/ko.json';
-import fr from '../messages/fr.json';
-import de from '../messages/de.json';
-import es from '../messages/es.json';
-import it from '../messages/it.json';
+import pt from '../messages/pt.json';
 import ru from '../messages/ru.json';
 import th from '../messages/th.json';
-import ar from '../messages/ar.json';
+import vi from '../messages/vi.json';
+import zhHans from '../messages/zh-hans.json';
+import zhHant from '../messages/zh-hant.json';
 
 const dictionaries: Record<string, Record<string, string>> = {
+  ar: ar as Record<string, string>,
+  de: de as Record<string, string>,
   en: en as Record<string, string>,
-  vi: vi as Record<string, string>,
-  zh: zh as Record<string, string>,
+  es: es as Record<string, string>,
+  fr: fr as Record<string, string>,
+  it: it as Record<string, string>,
   ja: ja as Record<string, string>,
   ko: ko as Record<string, string>,
-  fr: fr as Record<string, string>,
-  de: de as Record<string, string>,
-  es: es as Record<string, string>,
-  it: it as Record<string, string>,
+  pt: pt as Record<string, string>,
   ru: ru as Record<string, string>,
   th: th as Record<string, string>,
-  ar: ar as Record<string, string>,
+  vi: vi as Record<string, string>,
+  'zh-hans': zhHans as Record<string, string>,
+  'zh-hant': zhHant as Record<string, string>,
 };
 
 export const SUPPORTED_LOCALES = [
   { code: 'en', label: 'English' },
   { code: 'vi', label: 'Tiếng Việt' },
-  { code: 'zh', label: '中文 (简体)' },
+  { code: 'zh-hans', label: '简体中文' },
+  { code: 'zh-hant', label: '繁體中文' },
   { code: 'ja', label: '日本語' },
   { code: 'ko', label: '한국어' },
   { code: 'fr', label: 'Français' },
   { code: 'de', label: 'Deutsch' },
   { code: 'es', label: 'Español' },
+  { code: 'pt', label: 'Português' },
   { code: 'it', label: 'Italiano' },
   { code: 'ru', label: 'Русский' },
   { code: 'th', label: 'ไทย' },
   { code: 'ar', label: 'العربية' },
 ];
+
+export function resolveLocale(raw?: string | null): string {
+  if (!raw) return 'en';
+  const norm = raw.trim().toLowerCase().replace('_', '-');
+  if (norm === 'zh' || norm === 'zh-cn' || norm === 'zh-sg' || norm === 'zh-hans') {
+    return 'zh-hans';
+  }
+  if (norm === 'zh-tw' || norm === 'zh-hk' || norm === 'zh-mo' || norm === 'zh-hant') {
+    return 'zh-hant';
+  }
+  if (dictionaries[norm]) return norm;
+  const base = norm.split('-')[0];
+  if (base === 'zh') return 'zh-hans';
+  if (dictionaries[base]) return base;
+  return 'en';
+}
 
 interface I18nContextType {
   locale: string;
@@ -60,19 +82,30 @@ export function I18nProvider({ children }: { children: React.ReactNode }) {
   const [locale, setLocaleState] = useState<string>(() => {
     if (typeof window !== 'undefined') {
       const saved = localStorage.getItem('uid_agent_locale');
-      if (saved && dictionaries[saved]) return saved;
-      const browserLang = navigator.language?.split('-')[0];
-      if (browserLang && dictionaries[browserLang]) return browserLang;
+      if (saved) {
+        const resolved = resolveLocale(saved);
+        if (resolved !== saved) {
+          localStorage.setItem('uid_agent_locale', resolved);
+        }
+        return resolved;
+      }
+      return resolveLocale(navigator.language);
     }
     return 'en';
   });
 
-  const setLocale = (newLocale: string) => {
-    if (dictionaries[newLocale]) {
-      setLocaleState(newLocale);
-      if (typeof window !== 'undefined') {
-        localStorage.setItem('uid_agent_locale', newLocale);
-      }
+  useEffect(() => {
+    if (typeof document !== 'undefined') {
+      document.documentElement.lang = locale;
+      document.documentElement.dir = locale === 'ar' ? 'rtl' : 'ltr';
+    }
+  }, [locale]);
+
+  const setLocale = (next: string) => {
+    const resolved = resolveLocale(next);
+    setLocaleState(resolved);
+    if (typeof window !== 'undefined') {
+      localStorage.setItem('uid_agent_locale', resolved);
     }
   };
 

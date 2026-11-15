@@ -5,7 +5,7 @@ import { I18nProvider } from '../lib/i18n';
 
 export const metadata: Metadata = {
   title: 'UID Agent | Sovereign Identity Node',
-  description: 'Endpoint Hardware Security & PKCS#11 Smartcard Bridge',
+  description: 'Endpoint hardware security and PKCS#11 smartcard bridge',
 };
 
 export default function RootLayout({
@@ -14,8 +14,8 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="en" className="dark">
-      <body className="bg-slate-950 text-slate-100 antialiased min-h-screen">
+    <html lang="en" dir="ltr" className="dark">
+      <body className="bg-slate-950 text-slate-100 antialiased min-h-dvh">
         <I18nProvider>
           {children}
           <Toaster

@@ -1,6 +1,6 @@
 [package]
 name = "uid-agent-desktop"
-version = "3.0.15"
+version = "3.0.16"
 description = "UID Agent Desktop Application"
 authors = ["UID Team"]
 license = "MIT"
@@ -25,4 +25,3 @@ uid-agent = { path = ".." }
 tokio = { version = "1.35", features = ["full"] }
 reqwest = { version = "0.13", features = ["json"] }
 base64 = "0.22"
-
