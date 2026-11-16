@@ -1,61 +1,147 @@
-name: Release tauri app
+name: Release Tauri App
 
 on:
   push:
+    branches:
+      - main
     tags:
-      - 'v*'
+      - "v*"
+    paths-ignore:
+      - ".agents/**"
+      - ".agent/**"
+      - "docs/**"
+      - "**/*.docx"
+      - "README.md"
+      - "CHANGELOG.md"
   workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag (e.g. v3.0.16)"
+        required: false
+        default: ""
+
+concurrency:
+  group: uid-agent-${{ github.ref }}
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/v') }}
 
 jobs:
+  verify:
+    name: Verify UI Static Export & Tauri Rust (Ubuntu 1x)
+    if: github.event_name == 'push' && !startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Linux WebKitGTK 4.1 headers
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y             libgtk-3-dev             libwebkit2gtk-4.1-dev             libayatana-appindicator3-dev             librsvg2-dev             patchelf             libssl-dev             pkg-config
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Setup Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: "pnpm"
+          cache-dependency-path: ui/pnpm-lock.yaml
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust Cargo cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: "./src-tauri -> target"
+
+      - name: Install & build UI
+        working-directory: ui
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm run typecheck
+          pnpm run build
+
+      - name: Check Tauri Rust crate
+        run: cargo check --manifest-path src-tauri/Cargo.toml --locked
+
   release:
+    name: Build Tauri Desktop Installers
+    if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
     permissions:
       contents: write
     strategy:
       fail-fast: false
       matrix:
         include:
-          - platform: 'macos-latest'
-            args: '--target universal-apple-darwin'
-          - platform: 'ubuntu-22.04'
-            args: ''
-          - platform: 'windows-latest'
-            args: ''
+          - platform: "macos-latest"
+            args: "--target universal-apple-darwin"
+          - platform: "ubuntu-24.04"
+            args: ""
+          - platform: "windows-latest"
+            args: ""
 
     runs-on: ${{ matrix.platform }}
     steps:
       - uses: actions/checkout@v4
 
-      - name: Setup Node.js
+      - name: Install Linux dependencies (Ubuntu 24.04)
+        if: matrix.platform == 'ubuntu-24.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y             libgtk-3-dev             libwebkit2gtk-4.1-dev             libayatana-appindicator3-dev             librsvg2-dev             patchelf             libssl-dev             pkg-config
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Setup Node.js 22
         uses: actions/setup-node@v4
         with:
-          node-version: lts/*
+          node-version: 22
+          cache: "pnpm"
+          cache-dependency-path: ui/pnpm-lock.yaml
 
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.platform == 'macos-latest' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
 
-      - name: Install dependencies (Ubuntu only)
-        if: matrix.platform == 'ubuntu-22.04'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev libayatana-appindicator3-dev libssl-dev pkg-config
-
-      - name: Install pnpm
-        run: npm install -g pnpm
+      - name: Rust Cargo cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: "./src-tauri -> target"
 
       - name: Install UI dependencies
-        run: pnpm install
         working-directory: ui
+        run: pnpm install --frozen-lockfile
+
+      - name: Resolve release tag
+        id: meta
+        shell: bash
+        env:
+          INPUT_TAG: ${{ inputs.tag }}
+          REF_NAME: ${{ github.ref_name }}
+          REF_TYPE: ${{ github.ref_type }}
+        run: |
+          if [ -n "$INPUT_TAG" ]; then
+            echo "tag=$INPUT_TAG" >> "$GITHUB_OUTPUT"
+          elif [ "$REF_TYPE" = "tag" ]; then
+            echo "tag=$REF_NAME" >> "$GITHUB_OUTPUT"
+          else
+            VER=$(node -p "require('./src-tauri/tauri.conf.json').version")
+            echo "tag=v${VER}" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Build Tauri App and Draft Release
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          tagName: ${{ github.ref_name }}
-          releaseName: 'UID Agent v__VERSION__'
-          releaseBody: 'Pre-compiled desktop application installers. Download the appropriate file for your platform below.'
+          tagName: ${{ steps.meta.outputs.tag }}
+          releaseName: "UID Agent v__VERSION__"
+          releaseBody: "Pre-compiled desktop application installers. Download the appropriate file for your platform below."
           releaseDraft: true
           prerelease: false
           args: ${{ matrix.args }}
